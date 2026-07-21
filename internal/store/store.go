@@ -1,0 +1,502 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ncruces/go-sqlite3"
+	_ "github.com/ncruces/go-sqlite3/driver"
+)
+
+const (
+	defaultBusyTimeout = 500 * time.Millisecond
+	defaultBusyRetries = 4
+)
+
+type Store struct {
+	db          *sql.DB
+	stateDir    string
+	database    string
+	readOnly    bool
+	busyRetries int
+	now         func() time.Time
+}
+
+// Open opens or creates the version-1 ledger in stateDir. The directory is
+// treated as private application state and the database has the fixed name
+// DatabaseFilename.
+func Open(ctx context.Context, stateDir string) (*Store, error) {
+	return open(ctx, stateDir, false)
+}
+
+// OpenReadOnly opens an existing ledger without creating a state directory or
+// database. It fails with ErrNotFound when the fixed database file is absent.
+func OpenReadOnly(ctx context.Context, stateDir string) (*Store, error) {
+	return open(ctx, stateDir, true)
+}
+
+func open(ctx context.Context, stateDir string, readOnly bool) (*Store, error) {
+	dir, database, err := prepareStatePath(stateDir, readOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	dsn := sqliteDSN(database, readOnly, defaultBusyTimeout)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite driver: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxIdleTime(0)
+	db.SetConnMaxLifetime(0)
+
+	s := &Store{
+		db:          db,
+		stateDir:    dir,
+		database:    database,
+		readOnly:    readOnly,
+		busyRetries: defaultBusyRetries,
+		now: func() time.Time {
+			return time.Now().UTC().Round(0)
+		},
+	}
+	if err := s.pingWithRetry(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open ledger database: %w", err)
+	}
+	if err := verifyStatePath(dir, database); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.verifyPragmas(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if readOnly {
+		if err := validateSchema(ctx, db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	} else if err := s.initializeSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string {
+	u := sqliteFileURL(database, runtime.GOOS == "windows")
+	q := u.Query()
+	if readOnly {
+		q.Set("mode", "ro")
+		q.Add("_pragma", "query_only(ON)")
+	} else {
+		// prepareStatePath creates the file first, so mode=rw prevents the driver
+		// from following a late missing-path condition by creating elsewhere.
+		q.Set("mode", "rw")
+		q.Add("_pragma", "journal_mode(WAL)")
+		q.Set("_txlock", "immediate")
+	}
+	q.Add("_pragma", "busy_timeout("+strconv.FormatInt(busyTimeout.Milliseconds(), 10)+")")
+	q.Add("_pragma", "foreign_keys(ON)")
+	q.Add("_pragma", "recursive_triggers(ON)")
+	q.Add("_pragma", "synchronous(FULL)")
+	q.Add("_pragma", "trusted_schema(OFF)")
+	q.Set("_dqs", "false")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func sqliteFileURL(database string, windows bool) *url.URL {
+	path := filepath.ToSlash(database)
+	if windows {
+		// filepath.ToSlash follows the host platform, so portable tests need an
+		// explicit replacement when exercising Windows paths elsewhere.
+		path = strings.ReplaceAll(database, `\`, "/")
+		// SQLite interprets file:///C:/... as /C:/... with this driver. Keep a
+		// local drive path opaque so SQLite receives file:C:/..., matching the
+		// driver's documented filepath.ToSlash construction. prepareStatePath
+		// rejects Windows network and device paths before this point.
+		return &url.URL{Scheme: "file", Opaque: escapeSQLiteURIPath(path)}
+	}
+	return &url.URL{Scheme: "file", Path: path}
+}
+
+func escapeSQLiteURIPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
+}
+
+func prepareStatePath(stateDir string, readOnly bool) (string, string, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return "", "", fmt.Errorf("%w: empty state directory", ErrInvalid)
+	}
+	abs, err := filepath.Abs(filepath.Clean(stateDir))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve state directory: %w", err)
+	}
+	if err := validatePlatformStatePath(abs); err != nil {
+		return "", "", err
+	}
+	info, err := os.Lstat(abs)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", fmt.Errorf("inspect state directory: %w", err)
+		}
+		if readOnly {
+			return "", "", fmt.Errorf("%w: database %q", ErrNotFound, filepath.Join(abs, DatabaseFilename))
+		}
+		if err := os.MkdirAll(abs, 0o700); err != nil {
+			return "", "", fmt.Errorf("create private state directory: %w", err)
+		}
+		info, err = os.Lstat(abs)
+		if err != nil {
+			return "", "", fmt.Errorf("inspect created state directory: %w", err)
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", "", fmt.Errorf("%w: state directory is a symlink", ErrUnsafeStatePath)
+	}
+	if !info.IsDir() {
+		return "", "", fmt.Errorf("%w: state path is not a directory", ErrUnsafeStatePath)
+	}
+	if err := requirePrivateMode(info, true); err != nil {
+		return "", "", err
+	}
+	// Resolve any symlinks in ancestor components after proving that the state
+	// directory itself is not a symlink. All subsequent opens use this physical
+	// path, so replacing an ancestor symlink cannot redirect the database.
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve state directory ancestors: %w", err)
+	}
+	abs = filepath.Clean(resolved)
+	info, err = os.Lstat(abs)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", "", fmt.Errorf("%w: resolved state directory is unsafe", ErrUnsafeStatePath)
+	}
+	if err := requirePrivateMode(info, true); err != nil {
+		return "", "", err
+	}
+
+	database := filepath.Join(abs, DatabaseFilename)
+	dbInfo, err := os.Lstat(database)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", fmt.Errorf("inspect database path: %w", err)
+		}
+		if readOnly {
+			return "", "", fmt.Errorf("%w: database %q", ErrNotFound, database)
+		}
+		f, createErr := os.OpenFile(database, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if createErr != nil {
+			if !errors.Is(createErr, os.ErrExist) {
+				return "", "", fmt.Errorf("create private database file: %w", createErr)
+			}
+			dbInfo, err = os.Lstat(database)
+			if err != nil {
+				return "", "", fmt.Errorf("inspect concurrently created database file: %w", err)
+			}
+		} else {
+			if closeErr := f.Close(); closeErr != nil {
+				return "", "", fmt.Errorf("close new database file: %w", closeErr)
+			}
+			dbInfo, err = os.Lstat(database)
+			if err != nil {
+				return "", "", fmt.Errorf("inspect created database file: %w", err)
+			}
+		}
+	}
+	if dbInfo.Mode()&os.ModeSymlink != 0 {
+		return "", "", fmt.Errorf("%w: database file is a symlink", ErrUnsafeStatePath)
+	}
+	if !dbInfo.Mode().IsRegular() {
+		return "", "", fmt.Errorf("%w: database path is not a regular file", ErrUnsafeStatePath)
+	}
+	if err := requirePrivateMode(dbInfo, false); err != nil {
+		return "", "", err
+	}
+	return abs, database, nil
+}
+
+func verifyStatePath(stateDir, database string) error {
+	dirInfo, err := os.Lstat(stateDir)
+	if err != nil {
+		return fmt.Errorf("reinspect state directory: %w", err)
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() {
+		return fmt.Errorf("%w: state directory changed during open", ErrUnsafeStatePath)
+	}
+	if err := requirePrivateMode(dirInfo, true); err != nil {
+		return err
+	}
+	dbInfo, err := os.Lstat(database)
+	if err != nil {
+		return fmt.Errorf("reinspect database path: %w", err)
+	}
+	if dbInfo.Mode()&os.ModeSymlink != 0 || !dbInfo.Mode().IsRegular() {
+		return fmt.Errorf("%w: database path changed during open", ErrUnsafeStatePath)
+	}
+	return requirePrivateMode(dbInfo, false)
+}
+
+func requirePrivateMode(info os.FileInfo, directory bool) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		kind := "database file"
+		want := os.FileMode(0o600)
+		if directory {
+			kind = "state directory"
+			want = 0o700
+		}
+		return fmt.Errorf("%w: %s mode %04o is not private (expected no broader than %04o)",
+			ErrUnsafeStatePath, kind, info.Mode().Perm(), want)
+	}
+	return nil
+}
+
+func (s *Store) pingWithRetry(ctx context.Context) error {
+	var err error
+	for attempt := 0; attempt <= s.busyRetries; attempt++ {
+		err = s.db.PingContext(ctx)
+		if err == nil || !isSQLiteBusy(err) {
+			return err
+		}
+		if attempt == s.busyRetries {
+			break
+		}
+		if err := sleepContext(ctx, retryDelay(attempt)); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("%w: %v", ErrBusy, err)
+}
+
+func (s *Store) verifyPragmas(ctx context.Context) error {
+	var foreignKeys, busyTimeout, synchronous, recursiveTriggers, trustedSchema, queryOnly int
+	var journalMode string
+	if err := s.db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("read foreign_keys pragma: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		return fmt.Errorf("read busy_timeout pragma: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		return fmt.Errorf("read journal_mode pragma: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&synchronous); err != nil {
+		return fmt.Errorf("read synchronous pragma: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA recursive_triggers`).Scan(&recursiveTriggers); err != nil {
+		return fmt.Errorf("read recursive_triggers pragma: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA trusted_schema`).Scan(&trustedSchema); err != nil {
+		return fmt.Errorf("read trusted_schema pragma: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA query_only`).Scan(&queryOnly); err != nil {
+		return fmt.Errorf("read query_only pragma: %w", err)
+	}
+	wantQueryOnly := 0
+	if s.readOnly {
+		wantQueryOnly = 1
+	}
+	if foreignKeys != 1 || busyTimeout <= 0 || !strings.EqualFold(journalMode, "wal") || synchronous != 2 ||
+		recursiveTriggers != 1 || trustedSchema != 0 || queryOnly != wantQueryOnly {
+		return fmt.Errorf("configure sqlite: foreign_keys=%d busy_timeout=%d journal_mode=%s synchronous=%d recursive_triggers=%d trusted_schema=%d query_only=%d",
+			foreignKeys, busyTimeout, journalMode, synchronous, recursiveTriggers, trustedSchema, queryOnly)
+	}
+	return nil
+}
+
+type sqlReadWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) initializeSchema(ctx context.Context) error {
+	createdAt := formatTime(s.now())
+	return s.write(ctx, func(tx *sql.Tx) error {
+		var version int
+		if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+			return fmt.Errorf("read schema version: %w", err)
+		}
+		if version == 0 {
+			var tableCount int
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+			).Scan(&tableCount); err != nil {
+				return fmt.Errorf("inspect empty schema: %w", err)
+			}
+			if tableCount != 0 {
+				return fmt.Errorf("%w: version 0 database is not empty; legacy migration is unsupported", ErrInvalidSchema)
+			}
+			for _, statement := range schemaStatements {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("create schema version 1: %w", err)
+				}
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO metadata(key, value) VALUES ('schema_version', '1'), ('created_at', ?)`,
+				createdAt,
+			); err != nil {
+				return fmt.Errorf("initialize metadata: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, schemaVersionSQL); err != nil {
+				return fmt.Errorf("set schema version: %w", err)
+			}
+		}
+		return validateSchema(ctx, tx)
+	})
+}
+
+func validateSchema(ctx context.Context, q sqlReadWriter) error {
+	var userVersion int
+	if err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
+		return fmt.Errorf("%w: read user_version: %v", ErrInvalidSchema, err)
+	}
+	if userVersion != SchemaVersion {
+		return fmt.Errorf("%w: unsupported user_version %d", ErrInvalidSchema, userVersion)
+	}
+	var metadataVersion string
+	if err := q.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&metadataVersion); err != nil {
+		return fmt.Errorf("%w: read metadata schema version: %v", ErrInvalidSchema, err)
+	}
+	if metadataVersion != strconv.Itoa(SchemaVersion) {
+		return fmt.Errorf("%w: metadata schema version %q", ErrInvalidSchema, metadataVersion)
+	}
+
+	rows, err := q.QueryContext(ctx,
+		`SELECT type, name, sql FROM sqlite_schema
+		  WHERE type IN ('table', 'index', 'trigger') AND sql IS NOT NULL
+		  ORDER BY type, name`,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: inspect schema objects: %v", ErrInvalidSchema, err)
+	}
+	defer rows.Close()
+	tables := make(map[string]bool)
+	triggers := make(map[string]bool)
+	definitions := make(map[string]string)
+	for rows.Next() {
+		var objectType, name, definition string
+		if err := rows.Scan(&objectType, &name, &definition); err != nil {
+			return fmt.Errorf("%w: scan schema object: %v", ErrInvalidSchema, err)
+		}
+		switch objectType {
+		case "table":
+			tables[name] = true
+		case "trigger":
+			triggers[name] = true
+		}
+		definitions[name] = normalizeSchemaSQL(definition)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: inspect schema objects: %v", ErrInvalidSchema, err)
+	}
+	missing := missingObjects(tables, requiredTables)
+	missing = append(missing, missingObjects(triggers, requiredTriggers)...)
+	if len(missing) != 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("%w: missing required objects: %s", ErrInvalidSchema, strings.Join(missing, ", "))
+	}
+	expectedDefinitions := expectedSchemaDefinitions()
+	for name, expected := range expectedDefinitions {
+		if definitions[name] != expected {
+			return fmt.Errorf("%w: definition of %q differs from schema version %d", ErrInvalidSchema, name, SchemaVersion)
+		}
+	}
+	for name := range definitions {
+		if _, expected := expectedDefinitions[name]; !expected {
+			return fmt.Errorf("%w: unexpected schema object %q", ErrInvalidSchema, name)
+		}
+	}
+	return nil
+}
+
+func missingObjects(have map[string]bool, required []string) []string {
+	var missing []string
+	for _, name := range required {
+		if !have[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	var last error
+	for attempt := 0; attempt <= s.busyRetries; attempt++ {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			last = err
+		} else {
+			err = fn(tx)
+			if err == nil {
+				err = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+			if err == nil {
+				return nil
+			}
+			last = err
+		}
+		if !isSQLiteBusy(last) {
+			return last
+		}
+		if attempt == s.busyRetries {
+			break
+		}
+		if err := sleepContext(ctx, retryDelay(attempt)); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("%w after %d retries: %v", ErrBusy, s.busyRetries, last)
+}
+
+func isSQLiteBusy(err error) bool {
+	return errors.Is(err, sqlite3.BUSY) || errors.Is(err, sqlite3.LOCKED)
+}
+
+func retryDelay(attempt int) time.Duration {
+	delay := 10 * time.Millisecond * time.Duration(1<<min(attempt, 5))
+	return min(delay, 250*time.Millisecond)
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}

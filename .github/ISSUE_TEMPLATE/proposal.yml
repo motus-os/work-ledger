@@ -1,0 +1,33 @@
+name: Change proposal
+description: Describe a user problem before proposing a new command, field, dependency, or integration.
+title: "proposal: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete task is difficult today, and for whom?
+      placeholder: Describe the current workflow and where it fails.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How is the task handled without this change?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and scope
+      description: Add a reproducible example, affected version, and the smallest useful boundary.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Product boundaries
+      options:
+        - label: This proposal does not describe producer-controlled records as independent proof or attestation.
+          required: true
