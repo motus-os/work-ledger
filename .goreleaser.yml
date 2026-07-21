@@ -1,0 +1,95 @@
+version: 2
+
+project_name: motus
+
+before:
+  hooks:
+    - go mod verify
+    - go test ./...
+
+builds:
+  - id: motus
+    main: ./cmd/motus
+    binary: motus
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/motus-os/work-ledger/internal/buildinfo.Version={{ .Version }}
+        -X github.com/motus-os/work-ledger/internal/buildinfo.Commit={{ .FullCommit }}
+        -X github.com/motus-os/work-ledger/internal/buildinfo.Date={{ .CommitDate }}
+
+archives:
+  - ids:
+      - motus
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    wrap_in_directory: true
+    builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: README.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+      - src: ARCHITECTURE.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+      - src: SECURITY.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+      - src: LICENSE
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+      - src: third_party_licenses/README.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+      - src: third_party_licenses/**/*
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  disable: true
+
+release:
+  draft: true
+  prerelease: auto

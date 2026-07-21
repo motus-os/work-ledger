@@ -1,0 +1,11 @@
+.DS_Store
+.motus/
+bin/
+/motus
+/motus.exe
+*.test
+coverage.*
+dist/
+*.db
+*.db-shm
+*.db-wal
