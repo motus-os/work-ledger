@@ -37,9 +37,10 @@ Scope: local consistency only; producer-controlled records are not independently
 
 `motus wrap` starts the command directly, without a shell. It forwards stdin
 and copies stdout and stderr to their original destinations. Motus records byte
-and newline counts after the streams are drained. Because output is copied
-through pipes, a program that checks for a terminal can format its output
-differently than it would when run directly.
+and newline counts observed before the command finishes or Motus terminates it.
+Because output is copied through pipes, a program that checks for a terminal
+can format its output differently than it would when run directly. If an
+output destination closes, Motus stops the command tree and records a failure.
 
 ## What is recorded
 
@@ -47,7 +48,7 @@ differently than it would when run directly.
 - the executable's base name and argument count
 - the Git repository name, commit, and pre-run dirty state when available
 - stdout and stderr byte and newline counts
-- exit code, terminating signal, and outcome
+- exit code or terminating signal when available, and outcome
 - canonical event payloads created by Motus
 
 Motus does not store command argument values, stdin, raw stdout or stderr,
@@ -59,6 +60,9 @@ not send ledger data over the network.
 By default, Motus uses `.motus/ledger.db` at the current Git root. Outside a
 Git repository, it uses the current directory. Override this with
 `--state-dir PATH` or `MOTUS_STATE_DIR`.
+
+Motus creates state directories with private POSIX permissions. If you create
+a custom state directory yourself, restrict it to the current user before use.
 
 ```text
 motus wrap -- COMMAND [ARG ...]  Run a command and record selected metadata

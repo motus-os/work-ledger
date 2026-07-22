@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"os/signal"
 
 	"github.com/motus-os/work-ledger/internal/cli"
 	"github.com/motus-os/work-ledger/internal/signals"
@@ -11,8 +10,7 @@ import (
 
 func main() {
 	signals.IgnoreBrokenPipe()
-	ctx, stop := signal.NotifyContext(context.Background(), signals.Process()...)
-	defer stop()
+	ctx, stop := signals.NotifyContext(context.Background())
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		workingDirectory = "."
@@ -25,5 +23,6 @@ func main() {
 		Stdout:           os.Stdout,
 		Stderr:           os.Stderr,
 	})
+	stop()
 	os.Exit(code)
 }

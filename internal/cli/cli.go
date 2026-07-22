@@ -285,6 +285,9 @@ func optionalExitCode(exitCode int) *int {
 }
 
 func captureOutcome(result capture.Result) store.Outcome {
+	if result.Failures.Has(capture.FailureOutputCopy) {
+		return store.OutcomeFailure
+	}
 	if result.Failures.Has(capture.FailureTimeout) || result.Failures.Has(capture.FailureCanceled) {
 		return store.OutcomeAborted
 	}
@@ -302,6 +305,9 @@ func captureExitCode(result capture.Result) int {
 		return 124
 	}
 	if result.Failures.Has(capture.FailureCanceled) {
+		if result.CancellationSignalNumber > 0 && result.CancellationSignalNumber <= 127 {
+			return 128 + result.CancellationSignalNumber
+		}
 		return 130
 	}
 	if result.Failures.Has(capture.FailureStart) {

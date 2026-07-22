@@ -383,7 +383,7 @@ func (w *failingWriter) Write(payload []byte) (int, error) {
 	return remaining, nil
 }
 
-func TestWrapDrainsOutputAfterWriterFailure(t *testing.T) {
+func TestWrapClosesFailureAfterWriterFailure(t *testing.T) {
 	cwd := t.TempDir()
 	stateDir := filepath.Join(cwd, "state")
 	writer := &failingWriter{limit: 1024}
@@ -400,7 +400,9 @@ func TestWrapDrainsOutputAfterWriterFailure(t *testing.T) {
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRuns() = %#v, %v", runs, err)
 	}
-	if runs[0].State != store.RunClosed || runs[0].Outcome != store.OutcomeFailure || runs[0].Output.StdoutBytes != 1<<20 {
+	if runs[0].State != store.RunClosed || runs[0].Outcome != store.OutcomeFailure ||
+		runs[0].Output.StdoutBytes == 0 || runs[0].Output.StdoutBytes > 1<<20 ||
+		runs[0].Signal != nil {
 		t.Fatalf("writer-failure run = %#v", runs[0])
 	}
 }

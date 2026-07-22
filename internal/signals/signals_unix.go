@@ -9,12 +9,20 @@ import (
 )
 
 // IgnoreBrokenPipe makes downstream pipe closure observable as a write error.
-// That lets Motus finish draining the child and close its run record instead
-// of being terminated before lifecycle cleanup runs.
+// That lets Motus stop the supervised child tree and close its run record
+// instead of being terminated before lifecycle cleanup runs.
 func IgnoreBrokenPipe() {
 	signal.Ignore(syscall.SIGPIPE)
 }
 
-func Process() []os.Signal {
+func processSignals() []os.Signal {
 	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+}
+
+func signalNumber(received os.Signal) int {
+	value, ok := received.(syscall.Signal)
+	if !ok {
+		return 0
+	}
+	return int(value)
 }

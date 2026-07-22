@@ -95,6 +95,17 @@ func runCaptureHelper(args []string) int {
 			return helperInternalFailure
 		}
 		return 0
+	case "unbounded-stdout", "unbounded-stderr":
+		destination := io.Writer(os.Stdout)
+		if args[0] == "unbounded-stderr" {
+			destination = os.Stderr
+		}
+		payload := generatedOutput(32*1024, 29)
+		for {
+			if writeHelperOutput(destination, payload) != nil {
+				return helperInternalFailure
+			}
+		}
 	case "block":
 		// Write stdout last so observing child-ready also proves that the child
 		// attempted all expected stderr output before cancellation.
@@ -275,35 +286,49 @@ func TestRunWaitsForSlowWriterWithoutBlockingOtherStream(t *testing.T) {
 	assertStreamStats(t, "stderr", result.Stderr, expectedStderr, false)
 }
 
-func TestRunDrainsAndCountsAfterWriterFailure(t *testing.T) {
+func TestRunTerminatesUnboundedProducerAfterWriterFailure(t *testing.T) {
 	const writerSecret = "writer-error-secret-must-not-be-retained"
-	expectedStdout := generatedOutput(simultaneousStdoutSize, 17)
-	expectedStderr := generatedOutput(simultaneousStderrSize, 83)
-	failed := &failAfterWriter{
-		limit: 137,
-		err:   errors.New(writerSecret),
-	}
-	var stderr bytes.Buffer
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			failed := &failAfterWriter{limit: 137, err: errors.New(writerSecret)}
+			stdout, stderr := io.Writer(io.Discard), io.Writer(io.Discard)
+			if stream == "stdout" {
+				stdout = failed
+			} else {
+				stderr = failed
+			}
 
-	result := Run(
-		context.Background(),
-		os.Args[0],
-		captureHelperArgs("simultaneous"),
-		nil,
-		failed,
-		&stderr,
-	)
+			resultc := make(chan Result, 1)
+			go func() {
+				resultc <- Run(
+					context.Background(),
+					os.Args[0],
+					captureHelperArgs("unbounded-"+stream),
+					nil,
+					stdout,
+					stderr,
+				)
+			}()
+			result := awaitResult(t, resultc, 5*time.Second)
 
-	assertResultOutcome(t, result, 0, FailureOutputCopy)
-	assertBytesEqual(t, "forwarded stdout prefix", failed.Bytes(), expectedStdout[:failed.limit])
-	assertBytesEqual(t, "stderr after stdout failure", stderr.Bytes(), expectedStderr)
-	assertStreamStats(t, "stdout", result.Stdout, expectedStdout, true)
-	assertStreamStats(t, "stderr", result.Stderr, expectedStderr, false)
-	if got := failed.WritesAfterFailure(); got != 0 {
-		t.Fatalf("destination received %d writes after reporting failure", got)
-	}
-	if strings.Contains(fmt.Sprintf("%#v", result), writerSecret) {
-		t.Fatal("Result retained the downstream writer error text")
+			assertResultOutcome(t, result, -1, FailureOutputCopy)
+			stats := result.Stdout
+			if stream == "stderr" {
+				stats = result.Stderr
+			}
+			if !stats.CopyFailed || stats.Bytes == 0 || stats.Bytes > 8*1024*1024 {
+				t.Fatalf("%s stats after writer failure = %#v", stream, stats)
+			}
+			if got := len(failed.Bytes()); got != failed.limit {
+				t.Fatalf("forwarded %s bytes = %d, want %d", stream, got, failed.limit)
+			}
+			if got := failed.WritesAfterFailure(); got != 0 {
+				t.Fatalf("destination received %d writes after reporting failure", got)
+			}
+			if strings.Contains(fmt.Sprintf("%#v", result), writerSecret) {
+				t.Fatal("Result retained the downstream writer error text")
+			}
+		})
 	}
 }
 
