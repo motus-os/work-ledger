@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -113,7 +114,7 @@ func checkMetadata(ctx context.Context, q sqlReadWriter) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read metadata: %w", err)
 	}
-	if len(values) != 2 || values["schema_version"] != "1" {
+	if len(values) != 2 || values["schema_version"] != strconv.Itoa(SchemaVersion) {
 		return fmt.Errorf("metadata rows are incomplete or unexpected")
 	}
 	if _, err := parseTime(values["created_at"]); err != nil {

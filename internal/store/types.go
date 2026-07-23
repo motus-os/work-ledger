@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	// SchemaVersion is the only schema version understood by this package.
-	SchemaVersion = 1
+	// SchemaVersion is the current Store schema version.
+	SchemaVersion = 2
 	// DatabaseFilename is the fixed database name beneath a Store state directory.
 	DatabaseFilename = "ledger.db"
 	// MaxEventPayloadBytes bounds canonical event payload storage.

@@ -2,7 +2,10 @@ package store
 
 import "strings"
 
-const schemaVersionSQL = `PRAGMA user_version = 1`
+const (
+	legacySchemaVersion = 1
+	schemaVersionSQL    = `PRAGMA user_version = 2`
+)
 
 var schemaStatements = []string{
 	`CREATE TABLE metadata (
@@ -274,43 +277,80 @@ var schemaStatements = []string{
         END`,
 }
 
-var requiredTables = []string{"events", "finding_closures", "findings", "metadata", "runs"}
-
-var requiredTriggers = []string{
-	"events_no_delete",
-	"events_no_insert_after_terminal",
-	"events_no_insert_closed_run",
-	"events_no_update",
-	"events_lifecycle_shape",
-	"events_sequence_contiguous",
-	"finding_closures_no_delete",
-	"finding_closures_no_update",
-	"finding_closures_require_successful_resolution",
-	"findings_no_delete",
-	"findings_no_update",
-	"findings_require_closed_origin",
-	"metadata_no_delete",
-	"metadata_no_update",
-	"runs_close_requires_terminal_event",
-	"runs_no_delete",
-	"runs_no_identity_mutation",
-	"runs_no_terminal_mutation_after_close",
-	"runs_only_open_to_closed",
+var findingSchemaObjects = map[string]bool{
+	"finding_closures":                               true,
+	"finding_closures_no_delete":                     true,
+	"finding_closures_no_update":                     true,
+	"finding_closures_require_successful_resolution": true,
+	"findings":                       true,
+	"findings_no_delete":             true,
+	"findings_no_update":             true,
+	"findings_require_closed_origin": true,
 }
 
-func expectedSchemaDefinitions() map[string]string {
-	expected := make(map[string]string, len(schemaStatements))
-	for _, statement := range schemaStatements {
+type schemaObjectKey struct {
+	objectType string
+	name       string
+}
+
+func expectedSchemaDefinitionsFor(statements []string) map[schemaObjectKey]string {
+	expected := make(map[schemaObjectKey]string, len(statements))
+	for _, statement := range statements {
 		fields := strings.Fields(statement)
 		if len(fields) < 3 {
 			continue
 		}
 		switch fields[1] {
 		case "TABLE", "INDEX", "TRIGGER":
-			expected[fields[2]] = normalizeSchemaSQL(statement)
+			expected[schemaObjectKey{
+				objectType: strings.ToLower(fields[1]),
+				name:       fields[2],
+			}] = normalizeSchemaSQL(statement)
 		}
 	}
 	return expected
+}
+
+func schemaStatementsForVersion(version int) []string {
+	if version == SchemaVersion {
+		return schemaStatements
+	}
+	if version != legacySchemaVersion {
+		return nil
+	}
+	statements := make([]string, 0, len(schemaStatements)-len(findingSchemaObjects))
+	for _, statement := range schemaStatements {
+		fields := strings.Fields(statement)
+		if len(fields) >= 3 && findingSchemaObjects[fields[2]] {
+			continue
+		}
+		statements = append(statements, statement)
+	}
+	return statements
+}
+
+func schemaAdditionsSince(version int) []string {
+	if version != legacySchemaVersion {
+		return nil
+	}
+	statements := make([]string, 0, len(findingSchemaObjects))
+	for _, statement := range schemaStatements {
+		fields := strings.Fields(statement)
+		if len(fields) >= 3 && findingSchemaObjects[fields[2]] {
+			statements = append(statements, statement)
+		}
+	}
+	return statements
+}
+
+func schemaStatementByName(name string) string {
+	for _, statement := range schemaStatements {
+		fields := strings.Fields(statement)
+		if len(fields) >= 3 && fields[2] == name {
+			return statement
+		}
+	}
+	return ""
 }
 
 func normalizeSchemaSQL(statement string) string {

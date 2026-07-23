@@ -412,7 +412,7 @@ func runList(ctx context.Context, arguments []string, stateDir string, environme
 			return usageError(environment.Stderr, fmt.Errorf("unknown run list option %q", argument))
 		}
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if errors.Is(err, store.ErrNotFound) {
 		if jsonOutput {
 			fmt.Fprintln(environment.Stdout, "[]")
@@ -470,7 +470,7 @@ func runReceipt(ctx context.Context, arguments []string, stateDir string, enviro
 		}
 		return usageError(environment.Stderr, errors.New("run receipt requires one run ID"))
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if err != nil {
 		return commandError(environment.Stderr, err)
 	}
@@ -498,7 +498,7 @@ func runDoctor(ctx context.Context, arguments []string, stateDir string, environ
 			return usageError(environment.Stderr, fmt.Errorf("unknown doctor option %q", argument))
 		}
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if err != nil {
 		return commandError(environment.Stderr, err)
 	}

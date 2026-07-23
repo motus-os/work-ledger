@@ -242,7 +242,7 @@ func runFindingList(ctx context.Context, arguments []string, stateDir string, en
 	if err := store.ValidateListFindingsOptions(options); err != nil {
 		return usageError(environment.Stderr, err)
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if errors.Is(err, store.ErrNotFound) {
 		if jsonOutput {
 			fmt.Fprintln(environment.Stdout, "[]")
@@ -306,7 +306,7 @@ func runFindingShow(ctx context.Context, arguments []string, stateDir string, en
 	if findingID == "" {
 		return usageError(environment.Stderr, errors.New("finding show requires one finding ID"))
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if err != nil {
 		return commandError(environment.Stderr, err)
 	}
