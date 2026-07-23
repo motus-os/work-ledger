@@ -59,35 +59,101 @@ func validateOptional(name, value string, maxBytes int) error {
 }
 
 func canonicalJSON(raw json.RawMessage) ([]byte, error) {
+	return canonicalJSONNamed(raw, MaxEventPayloadBytes, "event")
+}
+
+func canonicalJSONNamed(raw json.RawMessage, maxBytes int, name string) ([]byte, error) {
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("%w: event payload is required", ErrInvalid)
+		return nil, fmt.Errorf("%w: %s payload is required", ErrInvalid, name)
 	}
 	if !utf8.Valid(raw) {
-		return nil, fmt.Errorf("%w: event payload must be valid UTF-8", ErrInvalid)
+		return nil, fmt.Errorf("%w: %s payload must be valid UTF-8", ErrInvalid, name)
 	}
-	if len(raw) > MaxEventPayloadBytes {
-		return nil, fmt.Errorf("%w: event payload exceeds %d bytes", ErrInvalid, MaxEventPayloadBytes)
+	if len(raw) > maxBytes {
+		return nil, fmt.Errorf("%w: %s payload exceeds %d bytes", ErrInvalid, name, maxBytes)
+	}
+	if err := validateJSONUnicodeEscapes(raw); err != nil {
+		return nil, fmt.Errorf("%w: invalid %s JSON: %v", ErrInvalid, name, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	value, err := decodeJSONValue(decoder)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid event JSON: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: invalid %s JSON: %v", ErrInvalid, name, err)
 	}
 	if _, err := decoder.Token(); err != io.EOF {
 		if err == nil {
 			err = errorsNewTrailingJSON
 		}
-		return nil, fmt.Errorf("%w: invalid event JSON: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: invalid %s JSON: %v", ErrInvalid, name, err)
 	}
 	canonical, err := json.Marshal(value)
 	if err != nil {
-		return nil, fmt.Errorf("canonicalize event JSON: %w", err)
+		return nil, fmt.Errorf("canonicalize %s JSON: %w", name, err)
 	}
-	if len(canonical) > MaxEventPayloadBytes {
-		return nil, fmt.Errorf("%w: canonical event payload exceeds %d bytes", ErrInvalid, MaxEventPayloadBytes)
+	if len(canonical) > maxBytes {
+		return nil, fmt.Errorf("%w: canonical %s payload exceeds %d bytes", ErrInvalid, name, maxBytes)
 	}
 	return canonical, nil
+}
+
+func validateJSONUnicodeEscapes(raw []byte) error {
+	inString := false
+	for index := 0; index < len(raw); index++ {
+		switch raw[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString || index+1 >= len(raw) {
+				continue
+			}
+			if raw[index+1] != 'u' {
+				index++
+				continue
+			}
+			unit, ok := parseJSONHexQuad(raw, index+2)
+			if !ok {
+				return fmt.Errorf("invalid Unicode escape")
+			}
+			switch {
+			case unit >= 0xd800 && unit <= 0xdbff:
+				if index+11 >= len(raw) || raw[index+6] != '\\' || raw[index+7] != 'u' {
+					return fmt.Errorf("unpaired high surrogate escape")
+				}
+				low, ok := parseJSONHexQuad(raw, index+8)
+				if !ok || low < 0xdc00 || low > 0xdfff {
+					return fmt.Errorf("unpaired high surrogate escape")
+				}
+				index += 11
+			case unit >= 0xdc00 && unit <= 0xdfff:
+				return fmt.Errorf("unpaired low surrogate escape")
+			default:
+				index += 5
+			}
+		}
+	}
+	return nil
+}
+
+func parseJSONHexQuad(raw []byte, start int) (uint16, bool) {
+	if start < 0 || start+4 > len(raw) {
+		return 0, false
+	}
+	var value uint16
+	for _, character := range raw[start : start+4] {
+		value <<= 4
+		switch {
+		case character >= '0' && character <= '9':
+			value |= uint16(character - '0')
+		case character >= 'a' && character <= 'f':
+			value |= uint16(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			value |= uint16(character-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
 }
 
 var errorsNewTrailingJSON = fmt.Errorf("trailing JSON value")

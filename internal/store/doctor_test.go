@@ -15,7 +15,7 @@ func TestDoctorCleanAndTamperedStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Doctor() error = %v", err)
 	}
-	if !report.Consistent || len(report.Checks) != 8 {
+	if !report.Consistent || len(report.Checks) != 10 {
 		t.Fatalf("Doctor() = %#v", report)
 	}
 	if !strings.Contains(report.Scope, "producer-controlled") {

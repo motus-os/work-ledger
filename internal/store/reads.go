@@ -19,6 +19,14 @@ func getRun(ctx context.Context, q sqlReadWriter, runID string) (Run, error) {
 	return run, nil
 }
 
+// GetRun returns one durable run projection.
+func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
+	if err := validateOpaque("run ID", runID, 255); err != nil {
+		return Run{}, err
+	}
+	return getRun(ctx, s.db, runID)
+}
+
 func getEventByID(ctx context.Context, q sqlReadWriter, eventID string) (Event, error) {
 	event, err := scanEvent(q.QueryRowContext(ctx, `SELECT `+eventColumns+` FROM events WHERE id = ?`, eventID))
 	if errors.Is(err, sql.ErrNoRows) {

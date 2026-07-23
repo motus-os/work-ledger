@@ -93,6 +93,35 @@ var schemaStatements = []string{
                    (terminal = 0 AND kind <> 'run.terminal')),
             FOREIGN KEY (run_id) REFERENCES runs(id)
         ) STRICT`,
+	`CREATE TABLE findings (
+            id             TEXT PRIMARY KEY,
+            origin_run_id  TEXT NOT NULL,
+            payload        BLOB NOT NULL,
+            payload_sha256 BLOB NOT NULL CHECK (length(payload_sha256) = 32),
+            recorded_at    TEXT NOT NULL,
+            CHECK (length(id) BETWEEN 1 AND 255),
+            CHECK (length(payload) <= 16384),
+            CHECK (json_valid(CAST(payload AS TEXT))),
+            CHECK (recorded_at GLOB '????-??-??T??:??:??.?????????Z'),
+            FOREIGN KEY (origin_run_id) REFERENCES runs(id)
+        ) STRICT`,
+	`CREATE TABLE finding_closures (
+            id               TEXT PRIMARY KEY,
+            finding_id       TEXT NOT NULL UNIQUE,
+            disposition      TEXT NOT NULL CHECK (disposition IN ('resolved', 'dismissed')),
+            resolving_run_id TEXT,
+            payload          BLOB NOT NULL,
+            payload_sha256   BLOB NOT NULL CHECK (length(payload_sha256) = 32),
+            recorded_at      TEXT NOT NULL,
+            CHECK (length(id) BETWEEN 1 AND 255),
+            CHECK (length(payload) <= 16384),
+            CHECK (json_valid(CAST(payload AS TEXT))),
+            CHECK (recorded_at GLOB '????-??-??T??:??:??.?????????Z'),
+            CHECK ((disposition = 'resolved' AND resolving_run_id IS NOT NULL)
+                OR (disposition = 'dismissed' AND resolving_run_id IS NULL)),
+            FOREIGN KEY (finding_id) REFERENCES findings(id),
+            FOREIGN KEY (resolving_run_id) REFERENCES runs(id)
+        ) STRICT`,
 	`CREATE TRIGGER metadata_no_update
         BEFORE UPDATE ON metadata
         BEGIN
@@ -204,9 +233,48 @@ var schemaStatements = []string{
 	        BEGIN
 	            SELECT RAISE(ABORT, 'event does not fit the version-1 lifecycle');
 	        END`,
+	`CREATE TRIGGER findings_no_update
+        BEFORE UPDATE ON findings
+        BEGIN
+            SELECT RAISE(ABORT, 'findings are append-only');
+        END`,
+	`CREATE TRIGGER findings_no_delete
+        BEFORE DELETE ON findings
+        BEGIN
+            SELECT RAISE(ABORT, 'findings are append-only');
+        END`,
+	`CREATE TRIGGER findings_require_closed_origin
+        BEFORE INSERT ON findings
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs WHERE id = NEW.origin_run_id AND state = 'closed'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'finding origin must be a closed run');
+        END`,
+	`CREATE TRIGGER finding_closures_no_update
+        BEFORE UPDATE ON finding_closures
+        BEGIN
+            SELECT RAISE(ABORT, 'finding closures are append-only');
+        END`,
+	`CREATE TRIGGER finding_closures_no_delete
+        BEFORE DELETE ON finding_closures
+        BEGIN
+            SELECT RAISE(ABORT, 'finding closures are append-only');
+        END`,
+	`CREATE TRIGGER finding_closures_require_successful_resolution
+        BEFORE INSERT ON finding_closures
+        WHEN NEW.disposition = 'resolved' AND NOT EXISTS (
+            SELECT 1 FROM runs
+             WHERE id = NEW.resolving_run_id
+               AND state = 'closed'
+               AND outcome = 'success'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'resolved finding requires a closed successful run');
+        END`,
 }
 
-var requiredTables = []string{"events", "metadata", "runs"}
+var requiredTables = []string{"events", "finding_closures", "findings", "metadata", "runs"}
 
 var requiredTriggers = []string{
 	"events_no_delete",
@@ -215,6 +283,12 @@ var requiredTriggers = []string{
 	"events_no_update",
 	"events_lifecycle_shape",
 	"events_sequence_contiguous",
+	"finding_closures_no_delete",
+	"finding_closures_no_update",
+	"finding_closures_require_successful_resolution",
+	"findings_no_delete",
+	"findings_no_update",
+	"findings_require_closed_origin",
 	"metadata_no_delete",
 	"metadata_no_update",
 	"runs_close_requires_terminal_event",

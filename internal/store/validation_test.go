@@ -24,6 +24,11 @@ func TestCanonicalJSONValidation(t *testing.T) {
 		{"nested", json.RawMessage(` [ 3, {"b":false,"a":null} ] `), `[3,{"a":null,"b":false}]`, true},
 		{"duplicate key", json.RawMessage(`{"a":1,"a":2}`), "", false},
 		{"trailing", json.RawMessage(`{} {}`), "", false},
+		{"valid surrogate pair", json.RawMessage(`{"value":"\ud83d\udc69"}`), `{"value":"👩"}`, true},
+		{"escaped surrogate text", json.RawMessage(`{"value":"\\ud800"}`), `{"value":"\\ud800"}`, true},
+		{"unpaired high surrogate", json.RawMessage(`{"value":"\ud800"}`), "", false},
+		{"unpaired low surrogate", json.RawMessage(`{"value":"\udc00"}`), "", false},
+		{"high surrogate followed by non-low", json.RawMessage(`{"value":"\ud800\u0041"}`), "", false},
 		{"empty", nil, "", false},
 	}
 	for _, test := range tests {

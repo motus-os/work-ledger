@@ -3,13 +3,51 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/motus-os/work-ledger/internal/store"
 )
+
+func TestDisplayCommandUsesPOSIXShellQuoting(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "must-not-exist")
+	values := []string{
+		"$(touch " + marker + ")",
+		"`touch " + marker + "`",
+		"single'quote",
+		"space separated",
+	}
+	arguments := append([]string{"printf", "%s\\n%s\\n%s\\n%s\\n"}, values...)
+	command := displayCommandForPlatform("linux", arguments...)
+	output, err := exec.Command("sh", "-c", command).Output()
+	if err != nil {
+		t.Fatalf("execute displayed command: %v; command=%q", err, command)
+	}
+	want := []byte(values[0] + "\n" + values[1] + "\n" + values[2] + "\n" + values[3] + "\n")
+	if !bytes.Equal(output, want) {
+		t.Fatalf("displayed command output = %q, want %q; command=%q", output, want, command)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("displayed command executed command substitution: %v", err)
+	}
+}
+
+func TestDisplayCommandUsesPowerShellLiteralArguments(t *testing.T) {
+	command := displayCommandForPlatform("windows",
+		`C:\Program Files\Motus\motus.exe`, "--state-dir",
+		`C:\state\$(touch owned)\%TEMP%\`+"`whoami`"+`\it's`,
+	)
+	want := `& 'C:\Program Files\Motus\motus.exe' '--state-dir' 'C:\state\$(touch owned)\%TEMP%\` +
+		"`whoami`" + `\it''s'`
+	if command != want {
+		t.Fatalf("PowerShell command = %q, want %q", command, want)
+	}
+}
 
 func TestWrapPreservesExternalSignal(t *testing.T) {
 	cwd := t.TempDir()

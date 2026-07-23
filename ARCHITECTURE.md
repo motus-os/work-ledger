@@ -23,6 +23,23 @@ into a Motus record. Raw output is forwarded and counted, not buffered in the
 ledger. A program can detect that its stdout and stderr are pipes, so formatting
 can differ from a direct invocation.
 
+Findings use a separate, explicit path:
+
+```text
+closed run
+    |
+    +-- finding add reads one bounded text or JSON file (or stdin)
+    +-- finding list searches authored fields deterministically
+    +-- finding close appends a resolved or dismissed closure
+            |
+            +-- resolved closures link to a closed successful run
+```
+
+Finding and closure payloads never enter through a command-line value. This
+keeps those payloads out of ordinary process listings and shell history. File
+paths and `--query` search terms are command-line values. Motus does not create
+findings by watching output or inferring a lesson from a run.
+
 ## Packages
 
 - `cmd/motus` wires process signals and exit status to the CLI.
@@ -54,12 +71,15 @@ SQLite runs with:
 - one connection per Motus process
 - immediate write transactions with bounded busy retries
 
-The schema has three tables: append-enforced metadata, runs, and append-only
-events. A run moves once from `open` to `closed`. Closing appends the final
+The schema has five tables: append-enforced metadata, runs, append-only events,
+findings, and finding closures. A run moves once from `open` to `closed`.
+Closing appends the final
 `run.terminal` event and updates the run projection in the same transaction.
 Database triggers reject event mutation, deletion, sequence gaps, writes after
 the terminal event, run deletion, start-metadata mutation, and changes to a
-closed run.
+closed run. Findings can reference only closed runs. A finding remains open
+until one immutable closure resolves it with a closed successful run or
+dismisses it with a note.
 
 ## Receipts
 
@@ -97,7 +117,7 @@ The first release does not include:
 - a daemon or automatic observation
 - signing, timestamping, or third-party attestation
 - workflow orchestration
-- organizational learning or recommendations
+- automatic findings, recommendations, or model-based retrieval
 
 Those capabilities require separate evidence and contracts. They are not
 implied by the ledger foundation.

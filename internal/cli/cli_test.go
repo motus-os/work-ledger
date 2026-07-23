@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -111,7 +110,7 @@ func TestWrapListReceiptDoctorEndToEnd(t *testing.T) {
 	if stdout.String() != "hello\n" {
 		t.Fatalf("wrap stdout = %q", stdout.String())
 	}
-	wantNext := "\nNext: " + displayCommand("motus", "--state-dir", stateDir, "run", "receipt") + " run_"
+	wantNext := "\n" + nextCommandLabel() + " " + displayCommand("motus", "--state-dir", stateDir, "run", "receipt") + " run_"
 	if !strings.HasPrefix(stderr.String(), "warning\nmotus: recorded run_") ||
 		!strings.Contains(stderr.String(), wantNext) {
 		t.Fatalf("wrap stderr = %q", stderr.String())
@@ -174,8 +173,9 @@ func TestWrapForwardsStdinAndPrintsAResolvableNextCommand(t *testing.T) {
 	if got := stdout.String(); got != "input stays out of the ledger\n" {
 		t.Fatalf("wrap stdout = %q", got)
 	}
-	wantPrefix := "Next: " + strconv.Quote(environment.ProgramName) +
-		" --state-dir " + strconv.Quote(stateDir) + " run receipt run_"
+	wantPrefix := nextCommandLabel() + " " + displayCommand(
+		environment.ProgramName, "--state-dir", stateDir, "run", "receipt",
+	) + " run_"
 	if !strings.Contains(stderr.String(), wantPrefix) {
 		t.Fatalf("wrap next instruction = %q, want prefix %q", stderr.String(), wantPrefix)
 	}
