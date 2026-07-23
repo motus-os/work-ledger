@@ -6,9 +6,10 @@ storing argument values or raw output. When a run exposes something worth
 keeping, you can connect a short finding to it and later close that finding
 with a successful run.
 
-Terminal scrollback disappears and CI logs live in separate systems. Motus
-gives those runs one local index, searchable findings, and deterministic JSON
-receipts for closed runs.
+Git records source changes, not whether a selected command ran or how it
+ended. Terminal scrollback disappears and CI logs live elsewhere. Motus gives
+selected runs stable IDs, searchable findings, and deterministic JSON receipts
+for closed runs.
 
 ## Try it from source
 
