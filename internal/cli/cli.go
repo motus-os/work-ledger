@@ -20,6 +20,7 @@ import (
 	"github.com/motus-os/work-ledger/internal/capture"
 	"github.com/motus-os/work-ledger/internal/gitmeta"
 	"github.com/motus-os/work-ledger/internal/ids"
+	"github.com/motus-os/work-ledger/internal/signals"
 	"github.com/motus-os/work-ledger/internal/statepath"
 	"github.com/motus-os/work-ledger/internal/store"
 )
@@ -38,7 +39,10 @@ type Environment struct {
 }
 
 // Run executes the CLI and returns the process exit status.
-func Run(ctx context.Context, arguments []string, environment Environment) int {
+func Run(ctx context.Context, arguments []string, environment Environment) (code int) {
+	defer func() {
+		code = processSignalExitCode(ctx, code)
+	}()
 	environment = normalizeEnvironment(environment)
 	options, remaining, err := parseRootOptions(arguments)
 	if err != nil {
@@ -89,6 +93,14 @@ func Run(ctx context.Context, arguments []string, environment Environment) int {
 	default:
 		return usageError(environment.Stderr, fmt.Errorf("unknown command %q", remaining[0]))
 	}
+}
+
+func processSignalExitCode(ctx context.Context, code int) int {
+	number := signals.CancellationNumber(ctx)
+	if number > 0 && number <= 127 {
+		return 128 + number
+	}
+	return code
 }
 
 type rootOptions struct {
@@ -285,6 +297,9 @@ func optionalExitCode(exitCode int) *int {
 }
 
 func captureOutcome(result capture.Result) store.Outcome {
+	if result.Failures.Has(capture.FailureOutputCopy) {
+		return store.OutcomeFailure
+	}
 	if result.Failures.Has(capture.FailureTimeout) || result.Failures.Has(capture.FailureCanceled) {
 		return store.OutcomeAborted
 	}
@@ -302,6 +317,9 @@ func captureExitCode(result capture.Result) int {
 		return 124
 	}
 	if result.Failures.Has(capture.FailureCanceled) {
+		if result.CancellationSignalNumber > 0 && result.CancellationSignalNumber <= 127 {
+			return 128 + result.CancellationSignalNumber
+		}
 		return 130
 	}
 	if result.Failures.Has(capture.FailureStart) {
@@ -513,6 +531,9 @@ func usageError(stderr io.Writer, err error) int {
 }
 
 func commandError(stderr io.Writer, err error) int {
+	if errors.Is(err, context.Canceled) {
+		return 1
+	}
 	fmt.Fprintf(stderr, "motus: %v\n", err)
 	return 1
 }

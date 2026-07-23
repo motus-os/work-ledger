@@ -13,7 +13,7 @@ motus wrap -- command args
           +-- create an open run
           +-- start the command directly, without a shell
           +-- forward stdin and copy stdout and stderr through pipes
-          +-- count bytes and newline delimiters while streams drain
+          +-- count bytes and newline delimiters while streams are copied
           +-- close the run and append its terminal event in one transaction
           +-- print the run ID and receipt command
 ```
@@ -27,8 +27,8 @@ can differ from a direct invocation.
 
 - `cmd/motus` wires process signals and exit status to the CLI.
 - `internal/cli` owns command parsing, output, and the record lifecycle.
-- `internal/capture` supervises a process group or Windows Job Object and
-  drains both output streams.
+- `internal/capture` supervises a process group or Windows Job Object, copies
+  both output streams, and stops the tree if an output destination fails.
 - `internal/gitmeta` reads repository root, commit, and dirty state with
   bounded output and a two-second deadline.
 - `internal/store` owns the SQLite schema, transactions, projections, and
@@ -54,8 +54,8 @@ SQLite runs with:
 - one connection per Motus process
 - immediate write transactions with bounded busy retries
 
-The schema has three tables: immutable metadata, runs, and append-only events.
-A run moves once from `open` to `closed`. Closing appends the final
+The schema has three tables: append-enforced metadata, runs, and append-only
+events. A run moves once from `open` to `closed`. Closing appends the final
 `run.terminal` event and updates the run projection in the same transaction.
 Database triggers reject event mutation, deletion, sequence gaps, writes after
 the terminal event, run deletion, start-metadata mutation, and changes to a
@@ -78,9 +78,12 @@ does not identify an independent observer.
 ## Failure behavior
 
 Motus does not run a command if it cannot create the open record. After a
-command starts, Motus drains output before returning, including after a
-downstream writer fails. Cancellation terminates the supervised process group
-or Job Object, waits for output forwarding, then closes the run as aborted.
+command starts, a downstream output failure terminates the supervised process
+group or Job Object, waits for output forwarding to finish, then closes the run
+as failed. Cancellation follows the same process-tree boundary and closes the
+run as aborted. A signal received after the command has completed still
+determines Motus's process exit status, but does not replace the recorded
+command outcome.
 
 An abrupt Motus crash can leave an open run. Committed events remain valid and
 ordered. The first release does not guess how an interrupted run should be

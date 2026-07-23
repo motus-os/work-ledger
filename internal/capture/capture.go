@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+
+	"github.com/motus-os/work-ledger/internal/signals"
 )
 
 // Failure is a bit set describing failures in starting, supervising, or
@@ -59,33 +61,38 @@ type StreamStats struct {
 // failures. A non-zero ExitCode alone is an ordinary command outcome and does
 // not set a Failure bit. Signal and SignalNumber are populated only when an
 // external Unix signal terminates the command; cancellation signals used by
-// this package are reported as cancellation or timeout instead.
+// this package are reported as cancellation instead and retain only their
+// numeric value in CancellationSignalNumber.
 type Result struct {
-	Command      CommandMetadata
-	Stdout       StreamStats
-	Stderr       StreamStats
-	ExitCode     int
-	Signal       string
-	SignalNumber int
-	Failures     Failure
+	Command                  CommandMetadata
+	Stdout                   StreamStats
+	Stderr                   StreamStats
+	ExitCode                 int
+	Signal                   string
+	SignalNumber             int
+	CancellationSignalNumber int
+	Failures                 Failure
 }
 
 // Run starts executable directly, without a shell. It forwards stdin to the
 // child and copies stdout and stderr byte-for-byte to their respective writers.
-// It waits for all output forwarding to finish, even after cancellation. A nil
-// stdin gives the child immediate EOF. A nil output writer discards that stream
-// while still counting it. Calls to the same comparable writer supplied for
-// both output streams are serialized.
+// It waits for all output forwarding to finish after normal child completion
+// or cancellation. A nil stdin gives the child immediate EOF. A nil output
+// writer discards that stream while still counting it. Calls to the same
+// comparable writer supplied for both output streams are serialized.
 //
 // Cancellation terminates the supervised platform process group or job. On
 // Unix, that includes descendants that remain in the child's process group;
 // portable process groups cannot contain a descendant that deliberately moves
 // itself into a different group or session.
 //
+// A downstream output failure terminates the supervised process tree so an
+// unbounded producer cannot run forever after its consumer has gone away. Run
+// still waits for the child and output-copy goroutines before returning.
+//
 // Run does not retain output, argument values, environment variables, or
 // errors that might contain those values. Output statistics describe bytes
-// read from the child, including bytes discarded after a downstream writer
-// fails.
+// read from the child before output forwarding stopped.
 func Run(
 	ctx context.Context,
 	executable string,
@@ -104,11 +111,13 @@ func Run(
 
 	if err := ctx.Err(); err != nil {
 		result.Failures |= contextFailure(err)
+		result.CancellationSignalNumber = signals.CancellationNumber(ctx)
 		return result
 	}
 
-	stdoutCounter := newStreamCounter(stdout)
-	stderrCounter := newStreamCounter(stderr)
+	outputFailed := make(chan struct{}, 1)
+	stdoutCounter := newStreamCounter(stdout, outputFailed)
+	stderrCounter := newStreamCounter(stderr, outputFailed)
 	if writersEqual(stdout, stderr) {
 		// Wrapping the destinations in separate counters hides their identity
 		// from os/exec. Restore its shared-writer serialization guarantee so a
@@ -151,8 +160,9 @@ func Run(
 	}()
 
 	var (
-		waitErr         error
-		contextFinished bool
+		waitErr          error
+		contextFinished  bool
+		outputTerminated bool
 	)
 	select {
 	case waitErr = <-waited:
@@ -167,24 +177,37 @@ func Run(
 			// copy goroutines, so returning early could truncate buffered output.
 			waitErr = <-waited
 		}
+	case <-outputFailed:
+		// Prefer a completed Wait when command completion and output failure
+		// race. Otherwise stop the complete supervised process tree. The stream
+		// counters absorb the destination error so Wait never exposes text from
+		// that error and its copy goroutines can finish cleanly.
+		select {
+		case waitErr = <-waited:
+		default:
+			outputTerminated = true
+			_ = process.terminate(cmd)
+			waitErr = <-waited
+		}
 	}
 	process.close()
 
 	result.Stdout = stdoutCounter.stats()
 	result.Stderr = stderrCounter.stats()
-	if cmd.ProcessState != nil {
+	if cmd.ProcessState != nil && !contextFinished && !outputTerminated {
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	}
 
 	if contextFinished {
 		result.Failures |= contextFailure(ctx.Err())
+		result.CancellationSignalNumber = signals.CancellationNumber(ctx)
 	} else if waitErr != nil {
 		var exitErr *exec.ExitError
 		if !asExitError(waitErr, &exitErr) {
-			// Downstream write errors are absorbed so the pipe can be drained. A
-			// remaining non-exit Wait error is therefore an OS-level copy failure.
+			// Downstream writer errors are absorbed by streamCounter. A remaining
+			// non-exit Wait error is therefore an OS-level copy failure.
 			result.Failures |= FailureOutputCopy
-		} else if name, number, signaled := processSignal(cmd.ProcessState); signaled {
+		} else if name, number, signaled := processSignal(cmd.ProcessState); signaled && !outputTerminated {
 			result.Signal = name
 			result.SignalNumber = number
 			result.Failures |= FailureSignal
@@ -224,16 +247,17 @@ func asExitError(err error, target **exec.ExitError) bool {
 type streamCounter struct {
 	destination   io.Writer
 	destinationMu *sync.Mutex
+	failure       chan<- struct{}
 	bytes         uint64
 	lines         uint64
 	failed        bool
 }
 
-func newStreamCounter(destination io.Writer) *streamCounter {
+func newStreamCounter(destination io.Writer, failure chan<- struct{}) *streamCounter {
 	if destination == nil {
 		destination = io.Discard
 	}
-	return &streamCounter{destination: destination}
+	return &streamCounter{destination: destination, failure: failure}
 }
 
 func (w *streamCounter) Write(p []byte) (int, error) {
@@ -246,10 +270,17 @@ func (w *streamCounter) Write(p []byte) (int, error) {
 
 	if !w.failed {
 		w.writeAll(p)
+		if w.failed {
+			select {
+			case w.failure <- struct{}{}:
+			default:
+			}
+		}
 	}
 
 	// Always report the full input as consumed. Once a destination fails, this
-	// drains the child's pipe without retaining output or allowing it to block.
+	// avoids retaining or returning the destination error while Run terminates
+	// the process tree and waits for the copy goroutines to finish.
 	return len(p), nil
 }
 
