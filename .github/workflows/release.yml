@@ -80,15 +80,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           files=(dist/*.tar.gz dist/*.zip dist/*.sbom.json dist/checksums.txt)
-          existing="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          existing="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)"
           if [ -z "$existing" ]; then
             gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
               --draft \
               --generate-notes \
               --title "Motus $GITHUB_REF_NAME" \
               --verify-tag
           elif [ "$existing" = "true" ]; then
-            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
           else
             printf 'Refusing to replace assets on a published release: %s\n' "$GITHUB_REF_NAME" >&2
             exit 1
