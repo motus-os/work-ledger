@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Motus has not reached its first public release. Security fixes currently apply
-to the latest commit on `main`.
+Only the latest published release is supported. Security fixes are developed
+on `main` and included in the next release.
 
 ## Report a vulnerability
 
