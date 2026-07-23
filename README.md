@@ -2,11 +2,13 @@
 
 Motus records command runs in a local SQLite ledger. It keeps the command name,
 timing, Git state, output counts, exit status, and outcome without storing the
-command's arguments or raw output.
+command's arguments or raw output. When a run exposes something worth keeping,
+you can connect a short finding to it and later connect the fix to a successful
+run.
 
 Terminal scrollback disappears and CI logs live in separate systems. Motus
-gives those runs one local index and a deterministic JSON receipt you can read
-later.
+gives those runs one local index, searchable findings, and a deterministic JSON
+receipt you can read later.
 
 ## Try it from source
 
@@ -35,6 +37,25 @@ PASS  state path: state directory and database paths pass local safety checks
 Scope: local consistency only; producer-controlled records are not independently authenticated.
 ```
 
+If a run exposed a useful failure, record the finding through standard input.
+The text is read by Motus, not parsed as a command-line value. Type one line,
+then press Ctrl-D to finish:
+
+```console
+$ ./bin/motus finding add --run run_7e2f... --file -
+The retry reused stale generated state.
+Recorded finding_91ac... (open)
+Run: run_7e2f...
+Summary: The retry reused stale generated state.
+
+$ ./bin/motus finding list --state open
+FINDING ID       STATE  RECORDED (UTC)         ORIGIN RUN   SUMMARY
+finding_91ac...  open   2026-07-21T17:31:05Z  run_7e2f...  The retry reused stale generated state.
+```
+
+After a successful fix run, close the finding with `finding close`. Motus keeps
+the original finding and appends a separate closure instead of rewriting it.
+
 `motus wrap` starts the command directly, without a shell. It forwards stdin
 and copies stdout and stderr to their original destinations. Motus records byte
 and newline counts observed before the command finishes or Motus terminates it.
@@ -50,10 +71,13 @@ output destination closes, Motus stops the command tree and records a failure.
 - stdout and stderr byte and newline counts
 - exit code or terminating signal when available, and outcome
 - canonical event payloads created by Motus
+- finding summaries, hypotheses, next steps, and closure notes that you
+  explicitly supply
 
-Motus does not store command argument values, stdin, raw stdout or stderr,
-environment variables, source files, prompts, or agent transcripts. It does
-not send ledger data over the network.
+Motus does not store command argument values, command stdin, raw stdout or
+stderr, environment variables, source files, prompts, or agent transcripts.
+Finding text is the exception: Motus stores the validated finding content you
+submit through a file or stdin. It does not send ledger data over the network.
 
 ## State and commands
 
@@ -68,6 +92,10 @@ a custom state directory yourself, restrict it to the current user before use.
 motus wrap -- COMMAND [ARG ...]  Run a command and record selected metadata
 motus run list [OPTIONS]         List and filter recorded runs
 motus run receipt RUN_ID         Write a JSON receipt for a closed run
+motus finding add [OPTIONS]      Connect an authored finding to a run
+motus finding list [OPTIONS]     List and search findings
+motus finding show FINDING_ID    Show a finding and its run context
+motus finding close [OPTIONS]    Resolve or dismiss a finding
 motus doctor [--json]            Check local database consistency
 motus version                    Print version information
 ```
@@ -77,9 +105,11 @@ version control.
 
 ## Trust boundary
 
-A Motus receipt is a producer-controlled process record. Database triggers
+A Motus receipt is a producer-controlled process record. Findings are also
+producer-controlled records: their text is authored, not independently
+verified or inferred by Motus. Database triggers
 block ordinary updates and deletes, and `motus doctor` checks the current
-schema, hashes, sequences, foreign keys, and terminal records. A person who
+schema, hashes, sequences, foreign keys, terminal records, and finding links. A person who
 controls the database file can replace those controls and rewrite a
 self-consistent history. Motus does not sign records, provide an independent
 observation, or prove that the recorded work was correct.

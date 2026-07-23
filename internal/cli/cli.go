@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -79,6 +80,8 @@ func Run(ctx context.Context, arguments []string, environment Environment) (code
 		return runWrap(ctx, remaining[1:], stateDir, environment)
 	case "run":
 		return runRun(ctx, remaining[1:], stateDir, environment)
+	case "finding":
+		return runFinding(ctx, remaining[1:], stateDir, environment)
 	case "doctor":
 		return runDoctor(ctx, remaining[1:], stateDir, environment)
 	case "version":
@@ -141,6 +144,9 @@ func normalizeEnvironment(environment Environment) Environment {
 	}
 	if environment.ProgramName == "" {
 		environment.ProgramName = "motus"
+	}
+	if environment.Stdin == nil {
+		environment.Stdin = strings.NewReader("")
 	}
 	if environment.Stdout == nil {
 		environment.Stdout = io.Discard
@@ -243,7 +249,7 @@ func runWrap(ctx context.Context, arguments []string, stateDir string, environme
 		fmt.Fprintln(environment.Stderr)
 	}
 	fmt.Fprintf(environment.Stderr, "motus: recorded %s (%s)\n", runID, outcome)
-	fmt.Fprintf(environment.Stderr, "Next: %s\n", displayCommand(
+	fmt.Fprintf(environment.Stderr, "%s %s\n", nextCommandLabel(), displayCommand(
 		environment.ProgramName,
 		"--state-dir", stateDir,
 		"run", "receipt", runID,
@@ -252,7 +258,17 @@ func runWrap(ctx context.Context, arguments []string, stateDir string, environme
 }
 
 func displayCommand(arguments ...string) string {
+	return displayCommandForPlatform(runtime.GOOS, arguments...)
+}
+
+func displayCommandForPlatform(goos string, arguments ...string) string {
 	formatted := make([]string, 0, len(arguments))
+	if goos == "windows" {
+		for _, argument := range arguments {
+			formatted = append(formatted, "'"+strings.ReplaceAll(argument, "'", "''")+"'")
+		}
+		return "& " + strings.Join(formatted, " ")
+	}
 	for _, argument := range arguments {
 		if argument != "" && strings.IndexFunc(argument, func(r rune) bool {
 			return !(r == '_' || r == '-' || r == '.' || r == '/' || r == '\\' || r == ':' ||
@@ -260,10 +276,17 @@ func displayCommand(arguments ...string) string {
 		}) == -1 {
 			formatted = append(formatted, argument)
 		} else {
-			formatted = append(formatted, strconv.Quote(argument))
+			formatted = append(formatted, "'"+strings.ReplaceAll(argument, "'", `'"'"'`)+"'")
 		}
 	}
 	return strings.Join(formatted, " ")
+}
+
+func nextCommandLabel() string {
+	if runtime.GOOS == "windows" {
+		return "Next (PowerShell):"
+	}
+	return "Next:"
 }
 
 type lastByteWriter struct {
@@ -389,7 +412,7 @@ func runList(ctx context.Context, arguments []string, stateDir string, environme
 			return usageError(environment.Stderr, fmt.Errorf("unknown run list option %q", argument))
 		}
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if errors.Is(err, store.ErrNotFound) {
 		if jsonOutput {
 			fmt.Fprintln(environment.Stdout, "[]")
@@ -447,7 +470,7 @@ func runReceipt(ctx context.Context, arguments []string, stateDir string, enviro
 		}
 		return usageError(environment.Stderr, errors.New("run receipt requires one run ID"))
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if err != nil {
 		return commandError(environment.Stderr, err)
 	}
@@ -475,7 +498,7 @@ func runDoctor(ctx context.Context, arguments []string, stateDir string, environ
 			return usageError(environment.Stderr, fmt.Errorf("unknown doctor option %q", argument))
 		}
 	}
-	ledger, err := store.OpenReadOnly(ctx, stateDir)
+	ledger, err := store.OpenForRead(ctx, stateDir)
 	if err != nil {
 		return commandError(environment.Stderr, err)
 	}
@@ -514,6 +537,13 @@ func writeJSON(destination io.Writer, value any, stderr io.Writer) int {
 	return 0
 }
 
+func writeText(destination io.Writer, text string, stderr io.Writer) int {
+	if _, err := io.WriteString(destination, text); err != nil {
+		return commandError(stderr, fmt.Errorf("write output: %w", err))
+	}
+	return 0
+}
+
 func writeVersion(destination io.Writer) {
 	parts := []string{"motus", buildinfo.EffectiveVersion()}
 	if buildinfo.Commit != "" && buildinfo.Commit != "unknown" {
@@ -543,6 +573,10 @@ func writeRootHelp(destination io.Writer) {
 		"wrap -- COMMAND [ARG ...]  Run a command and record selected metadata",
 		"run list [--json]          List recorded runs",
 		"run receipt RUN_ID         Write a JSON receipt for a closed run",
+		"finding add [OPTIONS]       Connect an authored finding to a run",
+		"finding list [OPTIONS]      List and search findings",
+		"finding show FINDING_ID     Show a finding and its run context",
+		"finding close [OPTIONS]     Resolve or dismiss a finding",
 		"doctor [--json]            Check local database consistency",
 		"version                    Print version information",
 	}

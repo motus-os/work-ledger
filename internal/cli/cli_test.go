@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +99,25 @@ func runCLI(t *testing.T, ctx context.Context, cwd, stateDir string, stdout, std
 	return Run(ctx, arguments, testEnvironment(cwd, stdout, stderr))
 }
 
+func recordedRunIDFromStderr(t *testing.T, output string) string {
+	t.Helper()
+	const marker = "motus: recorded "
+	start := strings.Index(output, marker)
+	if start == -1 {
+		t.Fatalf("recorded run marker missing from stderr %q", output)
+	}
+	start += len(marker)
+	end := strings.Index(output[start:], " (")
+	if end <= 0 {
+		t.Fatalf("recorded run outcome missing from stderr %q", output)
+	}
+	runID := output[start : start+end]
+	if !strings.HasPrefix(runID, "run_") {
+		t.Fatalf("recorded run ID = %q", runID)
+	}
+	return runID
+}
+
 func TestWrapListReceiptDoctorEndToEnd(t *testing.T) {
 	cwd := t.TempDir()
 	stateDir := filepath.Join(cwd, "state")
@@ -111,7 +129,10 @@ func TestWrapListReceiptDoctorEndToEnd(t *testing.T) {
 	if stdout.String() != "hello\n" {
 		t.Fatalf("wrap stdout = %q", stdout.String())
 	}
-	wantNext := "\nNext: " + displayCommand("motus", "--state-dir", stateDir, "run", "receipt") + " run_"
+	recordedRunID := recordedRunIDFromStderr(t, stderr.String())
+	wantNext := "\n" + nextCommandLabel() + " " + displayCommand(
+		"motus", "--state-dir", stateDir, "run", "receipt", recordedRunID,
+	) + "\n"
 	if !strings.HasPrefix(stderr.String(), "warning\nmotus: recorded run_") ||
 		!strings.Contains(stderr.String(), wantNext) {
 		t.Fatalf("wrap stderr = %q", stderr.String())
@@ -126,7 +147,8 @@ func TestWrapListReceiptDoctorEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &runs); err != nil {
 		t.Fatalf("decode list: %v; output=%q", err, stdout.String())
 	}
-	if len(runs) != 1 || runs[0].State != store.RunClosed || runs[0].Outcome != store.OutcomeSuccess {
+	if len(runs) != 1 || runs[0].ID != recordedRunID ||
+		runs[0].State != store.RunClosed || runs[0].Outcome != store.OutcomeSuccess {
 		t.Fatalf("runs = %#v", runs)
 	}
 	if runs[0].Output.StdoutBytes != 6 || runs[0].Output.StdoutLines != 1 ||
@@ -174,10 +196,12 @@ func TestWrapForwardsStdinAndPrintsAResolvableNextCommand(t *testing.T) {
 	if got := stdout.String(); got != "input stays out of the ledger\n" {
 		t.Fatalf("wrap stdout = %q", got)
 	}
-	wantPrefix := "Next: " + strconv.Quote(environment.ProgramName) +
-		" --state-dir " + strconv.Quote(stateDir) + " run receipt run_"
-	if !strings.Contains(stderr.String(), wantPrefix) {
-		t.Fatalf("wrap next instruction = %q, want prefix %q", stderr.String(), wantPrefix)
+	recordedRunID := recordedRunIDFromStderr(t, stderr.String())
+	wantNext := nextCommandLabel() + " " + displayCommand(
+		environment.ProgramName, "--state-dir", stateDir, "run", "receipt", recordedRunID,
+	) + "\n"
+	if !strings.Contains(stderr.String(), wantNext) {
+		t.Fatalf("wrap next instruction = %q, want %q", stderr.String(), wantNext)
 	}
 	if err := filepath.WalkDir(stateDir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() {

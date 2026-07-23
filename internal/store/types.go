@@ -7,12 +7,14 @@ import (
 )
 
 const (
-	// SchemaVersion is the only schema version understood by this package.
-	SchemaVersion = 1
+	// SchemaVersion is the current Store schema version.
+	SchemaVersion = 2
 	// DatabaseFilename is the fixed database name beneath a Store state directory.
 	DatabaseFilename = "ledger.db"
 	// MaxEventPayloadBytes bounds canonical event payload storage.
 	MaxEventPayloadBytes = 1 << 20
+	// MaxFindingPayloadBytes bounds finding and closure payload storage.
+	MaxFindingPayloadBytes = 16 << 10
 )
 
 var (
@@ -132,6 +134,83 @@ type ListRunsOptions struct {
 	Outcome Outcome
 	Limit   int
 	Offset  int
+}
+
+// FindingState is derived from the presence and disposition of an immutable
+// closure record.
+type FindingState string
+
+const (
+	FindingOpen      FindingState = "open"
+	FindingResolved  FindingState = "resolved"
+	FindingDismissed FindingState = "dismissed"
+)
+
+// FindingDisposition closes a finding without rewriting its original record.
+type FindingDisposition string
+
+const (
+	DispositionResolved  FindingDisposition = "resolved"
+	DispositionDismissed FindingDisposition = "dismissed"
+)
+
+// FindingContent is operator- or agent-authored context connected to a
+// recorded run. Motus stores this content only when it is explicitly supplied.
+type FindingContent struct {
+	Summary    string `json:"summary"`
+	Hypothesis string `json:"hypothesis,omitempty"`
+	NextStep   string `json:"next_step,omitempty"`
+}
+
+// FindingClosureContent records why a finding was resolved or dismissed.
+type FindingClosureContent struct {
+	Note string `json:"note"`
+}
+
+// FindingClosure is an immutable terminal record for one finding.
+type FindingClosure struct {
+	ID             string                `json:"id"`
+	FindingID      string                `json:"finding_id"`
+	Disposition    FindingDisposition    `json:"disposition"`
+	ResolvingRunID string                `json:"resolving_run_id,omitempty"`
+	Content        FindingClosureContent `json:"content"`
+	PayloadSHA256  string                `json:"payload_sha256"`
+	RecordedAt     time.Time             `json:"recorded_at"`
+}
+
+// Finding connects explicit operator- or agent-authored context to a closed
+// run. State is derived from Closure and is not stored independently.
+type Finding struct {
+	ID            string          `json:"id"`
+	OriginRunID   string          `json:"origin_run_id"`
+	Content       FindingContent  `json:"content"`
+	PayloadSHA256 string          `json:"payload_sha256"`
+	RecordedAt    time.Time       `json:"recorded_at"`
+	State         FindingState    `json:"state"`
+	Closure       *FindingClosure `json:"closure,omitempty"`
+}
+
+type AddFindingParams struct {
+	ID          string
+	OriginRunID string
+	Content     FindingContent
+}
+
+type CloseFindingParams struct {
+	ID             string
+	Disposition    FindingDisposition
+	ResolvingRunID string
+	Content        FindingClosureContent
+}
+
+// ListFindingsOptions controls deterministic newest-first listing. Limit
+// defaults to 100 and cannot exceed 1000. Query is a case-insensitive match
+// over finding IDs, run IDs, authored content, and closure content.
+type ListFindingsOptions struct {
+	State  FindingState
+	Query  string
+	Limit  int
+	Offset int
 }
 
 // Receipt contains a deterministic JSON envelope and the lowercase

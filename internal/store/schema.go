@@ -2,7 +2,10 @@ package store
 
 import "strings"
 
-const schemaVersionSQL = `PRAGMA user_version = 1`
+const (
+	legacySchemaVersion = 1
+	schemaVersionSQL    = `PRAGMA user_version = 2`
+)
 
 var schemaStatements = []string{
 	`CREATE TABLE metadata (
@@ -92,6 +95,35 @@ var schemaStatements = []string{
             CHECK ((terminal = 1 AND kind = 'run.terminal') OR
                    (terminal = 0 AND kind <> 'run.terminal')),
             FOREIGN KEY (run_id) REFERENCES runs(id)
+        ) STRICT`,
+	`CREATE TABLE findings (
+            id             TEXT PRIMARY KEY,
+            origin_run_id  TEXT NOT NULL,
+            payload        BLOB NOT NULL,
+            payload_sha256 BLOB NOT NULL CHECK (length(payload_sha256) = 32),
+            recorded_at    TEXT NOT NULL,
+            CHECK (length(id) BETWEEN 1 AND 255),
+            CHECK (length(payload) <= 16384),
+            CHECK (json_valid(CAST(payload AS TEXT))),
+            CHECK (recorded_at GLOB '????-??-??T??:??:??.?????????Z'),
+            FOREIGN KEY (origin_run_id) REFERENCES runs(id)
+        ) STRICT`,
+	`CREATE TABLE finding_closures (
+            id               TEXT PRIMARY KEY,
+            finding_id       TEXT NOT NULL UNIQUE,
+            disposition      TEXT NOT NULL CHECK (disposition IN ('resolved', 'dismissed')),
+            resolving_run_id TEXT,
+            payload          BLOB NOT NULL,
+            payload_sha256   BLOB NOT NULL CHECK (length(payload_sha256) = 32),
+            recorded_at      TEXT NOT NULL,
+            CHECK (length(id) BETWEEN 1 AND 255),
+            CHECK (length(payload) <= 16384),
+            CHECK (json_valid(CAST(payload AS TEXT))),
+            CHECK (recorded_at GLOB '????-??-??T??:??:??.?????????Z'),
+            CHECK ((disposition = 'resolved' AND resolving_run_id IS NOT NULL)
+                OR (disposition = 'dismissed' AND resolving_run_id IS NULL)),
+            FOREIGN KEY (finding_id) REFERENCES findings(id),
+            FOREIGN KEY (resolving_run_id) REFERENCES runs(id)
         ) STRICT`,
 	`CREATE TRIGGER metadata_no_update
         BEFORE UPDATE ON metadata
@@ -204,39 +236,121 @@ var schemaStatements = []string{
 	        BEGIN
 	            SELECT RAISE(ABORT, 'event does not fit the version-1 lifecycle');
 	        END`,
+	`CREATE TRIGGER findings_no_update
+        BEFORE UPDATE ON findings
+        BEGIN
+            SELECT RAISE(ABORT, 'findings are append-only');
+        END`,
+	`CREATE TRIGGER findings_no_delete
+        BEFORE DELETE ON findings
+        BEGIN
+            SELECT RAISE(ABORT, 'findings are append-only');
+        END`,
+	`CREATE TRIGGER findings_require_closed_origin
+        BEFORE INSERT ON findings
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs WHERE id = NEW.origin_run_id AND state = 'closed'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'finding origin must be a closed run');
+        END`,
+	`CREATE TRIGGER finding_closures_no_update
+        BEFORE UPDATE ON finding_closures
+        BEGIN
+            SELECT RAISE(ABORT, 'finding closures are append-only');
+        END`,
+	`CREATE TRIGGER finding_closures_no_delete
+        BEFORE DELETE ON finding_closures
+        BEGIN
+            SELECT RAISE(ABORT, 'finding closures are append-only');
+        END`,
+	`CREATE TRIGGER finding_closures_require_successful_resolution
+        BEFORE INSERT ON finding_closures
+        WHEN NEW.disposition = 'resolved' AND NOT EXISTS (
+            SELECT 1 FROM runs
+             WHERE id = NEW.resolving_run_id
+               AND state = 'closed'
+               AND outcome = 'success'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'resolved finding requires a closed successful run');
+        END`,
 }
 
-var requiredTables = []string{"events", "metadata", "runs"}
-
-var requiredTriggers = []string{
-	"events_no_delete",
-	"events_no_insert_after_terminal",
-	"events_no_insert_closed_run",
-	"events_no_update",
-	"events_lifecycle_shape",
-	"events_sequence_contiguous",
-	"metadata_no_delete",
-	"metadata_no_update",
-	"runs_close_requires_terminal_event",
-	"runs_no_delete",
-	"runs_no_identity_mutation",
-	"runs_no_terminal_mutation_after_close",
-	"runs_only_open_to_closed",
+var findingSchemaObjects = map[string]bool{
+	"finding_closures":                               true,
+	"finding_closures_no_delete":                     true,
+	"finding_closures_no_update":                     true,
+	"finding_closures_require_successful_resolution": true,
+	"findings":                       true,
+	"findings_no_delete":             true,
+	"findings_no_update":             true,
+	"findings_require_closed_origin": true,
 }
 
-func expectedSchemaDefinitions() map[string]string {
-	expected := make(map[string]string, len(schemaStatements))
-	for _, statement := range schemaStatements {
+type schemaObjectKey struct {
+	objectType string
+	name       string
+}
+
+func expectedSchemaDefinitionsFor(statements []string) map[schemaObjectKey]string {
+	expected := make(map[schemaObjectKey]string, len(statements))
+	for _, statement := range statements {
 		fields := strings.Fields(statement)
 		if len(fields) < 3 {
 			continue
 		}
 		switch fields[1] {
 		case "TABLE", "INDEX", "TRIGGER":
-			expected[fields[2]] = normalizeSchemaSQL(statement)
+			expected[schemaObjectKey{
+				objectType: strings.ToLower(fields[1]),
+				name:       fields[2],
+			}] = normalizeSchemaSQL(statement)
 		}
 	}
 	return expected
+}
+
+func schemaStatementsForVersion(version int) []string {
+	if version == SchemaVersion {
+		return schemaStatements
+	}
+	if version != legacySchemaVersion {
+		return nil
+	}
+	statements := make([]string, 0, len(schemaStatements)-len(findingSchemaObjects))
+	for _, statement := range schemaStatements {
+		fields := strings.Fields(statement)
+		if len(fields) >= 3 && findingSchemaObjects[fields[2]] {
+			continue
+		}
+		statements = append(statements, statement)
+	}
+	return statements
+}
+
+func schemaAdditionsSince(version int) []string {
+	if version != legacySchemaVersion {
+		return nil
+	}
+	statements := make([]string, 0, len(findingSchemaObjects))
+	for _, statement := range schemaStatements {
+		fields := strings.Fields(statement)
+		if len(fields) >= 3 && findingSchemaObjects[fields[2]] {
+			statements = append(statements, statement)
+		}
+	}
+	return statements
+}
+
+func schemaStatementByName(name string) string {
+	for _, statement := range schemaStatements {
+		fields := strings.Fields(statement)
+		if len(fields) >= 3 && fields[2] == name {
+			return statement
+		}
+	}
+	return ""
 }
 
 func normalizeSchemaSQL(statement string) string {

@@ -23,6 +23,8 @@ const (
 	defaultBusyRetries = 4
 )
 
+var errSchemaMigrationRequired = errors.New("store: schema migration required")
+
 type Store struct {
 	db          *sql.DB
 	stateDir    string
@@ -32,21 +34,38 @@ type Store struct {
 	now         func() time.Time
 }
 
-// Open opens or creates the version-1 ledger in stateDir. The directory is
+// Open opens or creates the current ledger in stateDir. The directory is
 // treated as private application state and the database has the fixed name
 // DatabaseFilename.
 func Open(ctx context.Context, stateDir string) (*Store, error) {
-	return open(ctx, stateDir, false)
+	return open(ctx, stateDir, false, false)
 }
 
-// OpenReadOnly opens an existing ledger without creating a state directory or
-// database. It fails with ErrNotFound when the fixed database file is absent.
+// OpenReadOnly opens an existing current-schema ledger without creating or
+// migrating it. It fails with ErrNotFound when the fixed database is absent.
 func OpenReadOnly(ctx context.Context, stateDir string) (*Store, error) {
-	return open(ctx, stateDir, true)
+	return open(ctx, stateDir, true, true)
 }
 
-func open(ctx context.Context, stateDir string, readOnly bool) (*Store, error) {
-	dir, database, err := prepareStatePath(stateDir, readOnly)
+// OpenForRead opens an existing ledger without creating one. A valid older
+// schema is migrated atomically before the ledger is reopened read-only.
+func OpenForRead(ctx context.Context, stateDir string) (*Store, error) {
+	ledger, err := OpenReadOnly(ctx, stateDir)
+	if !errors.Is(err, errSchemaMigrationRequired) {
+		return ledger, err
+	}
+	migrator, err := open(ctx, stateDir, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("migrate ledger: %w", err)
+	}
+	if err := migrator.Close(); err != nil {
+		return nil, fmt.Errorf("close migrated ledger: %w", err)
+	}
+	return OpenReadOnly(ctx, stateDir)
+}
+
+func open(ctx context.Context, stateDir string, readOnly, existingOnly bool) (*Store, error) {
+	dir, database, err := prepareStatePath(stateDir, existingOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +167,7 @@ func escapeSQLiteURIPath(path string) string {
 	return strings.Join(parts, "/")
 }
 
-func prepareStatePath(stateDir string, readOnly bool) (string, string, error) {
+func prepareStatePath(stateDir string, existingOnly bool) (string, string, error) {
 	if strings.TrimSpace(stateDir) == "" {
 		return "", "", fmt.Errorf("%w: empty state directory", ErrInvalid)
 	}
@@ -164,7 +183,7 @@ func prepareStatePath(stateDir string, readOnly bool) (string, string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", "", fmt.Errorf("inspect state directory: %w", err)
 		}
-		if readOnly {
+		if existingOnly {
 			return "", "", fmt.Errorf("%w: database %q", ErrNotFound, filepath.Join(abs, DatabaseFilename))
 		}
 		if err := os.MkdirAll(abs, 0o700); err != nil {
@@ -206,7 +225,7 @@ func prepareStatePath(stateDir string, readOnly bool) (string, string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", "", fmt.Errorf("inspect database path: %w", err)
 		}
-		if readOnly {
+		if existingOnly {
 			return "", "", fmt.Errorf("%w: database %q", ErrNotFound, database)
 		}
 		f, createErr := os.OpenFile(database, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
@@ -344,7 +363,8 @@ func (s *Store) initializeSchema(ctx context.Context) error {
 		if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 			return fmt.Errorf("read schema version: %w", err)
 		}
-		if version == 0 {
+		switch version {
+		case 0:
 			var tableCount int
 			if err := tx.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
@@ -356,18 +376,57 @@ func (s *Store) initializeSchema(ctx context.Context) error {
 			}
 			for _, statement := range schemaStatements {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("create schema version 1: %w", err)
+					return fmt.Errorf("create schema version %d: %w", SchemaVersion, err)
 				}
 			}
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO metadata(key, value) VALUES ('schema_version', '1'), ('created_at', ?)`,
-				createdAt,
+				`INSERT INTO metadata(key, value) VALUES ('schema_version', ?), ('created_at', ?)`,
+				strconv.Itoa(SchemaVersion), createdAt,
 			); err != nil {
 				return fmt.Errorf("initialize metadata: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, schemaVersionSQL); err != nil {
 				return fmt.Errorf("set schema version: %w", err)
 			}
+		case legacySchemaVersion:
+			if err := validateSchemaVersion(ctx, tx, legacySchemaVersion,
+				schemaStatementsForVersion(legacySchemaVersion)); err != nil {
+				return fmt.Errorf("validate schema before migration: %w", err)
+			}
+			for _, statement := range schemaAdditionsSince(legacySchemaVersion) {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("migrate schema version %d to %d: %w",
+						legacySchemaVersion, SchemaVersion, err)
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `DROP TRIGGER metadata_no_update`); err != nil {
+				return fmt.Errorf("prepare schema metadata migration: %w", err)
+			}
+			result, err := tx.ExecContext(ctx,
+				`UPDATE metadata SET value = ? WHERE key = 'schema_version'`,
+				strconv.Itoa(SchemaVersion),
+			)
+			if err != nil {
+				return fmt.Errorf("update schema metadata: %w", err)
+			}
+			rows, err := result.RowsAffected()
+			if err != nil || rows != 1 {
+				return fmt.Errorf("update schema metadata: rows affected=%d, error=%v", rows, err)
+			}
+			metadataGuard := schemaStatementByName("metadata_no_update")
+			if metadataGuard == "" {
+				return errors.New("metadata update guard is missing from the current schema")
+			}
+			if _, err := tx.ExecContext(ctx, metadataGuard); err != nil {
+				return fmt.Errorf("restore schema metadata guard: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, schemaVersionSQL); err != nil {
+				return fmt.Errorf("finish schema migration: %w", err)
+			}
+		case SchemaVersion:
+			// The current schema is validated below.
+		default:
+			return fmt.Errorf("%w: unsupported user_version %d", ErrInvalidSchema, version)
 		}
 		return validateSchema(ctx, tx)
 	})
@@ -378,14 +437,34 @@ func validateSchema(ctx context.Context, q sqlReadWriter) error {
 	if err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
 		return fmt.Errorf("%w: read user_version: %v", ErrInvalidSchema, err)
 	}
-	if userVersion != SchemaVersion {
+	if userVersion == legacySchemaVersion && SchemaVersion != legacySchemaVersion {
+		if err := validateSchemaVersion(ctx, q, legacySchemaVersion,
+			schemaStatementsForVersion(legacySchemaVersion)); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: schema version %d", errSchemaMigrationRequired, userVersion)
+	}
+	return validateSchemaVersion(ctx, q, SchemaVersion, schemaStatements)
+}
+
+func validateSchemaVersion(
+	ctx context.Context,
+	q sqlReadWriter,
+	expectedVersion int,
+	expectedStatements []string,
+) error {
+	var userVersion int
+	if err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
+		return fmt.Errorf("%w: read user_version: %v", ErrInvalidSchema, err)
+	}
+	if userVersion != expectedVersion {
 		return fmt.Errorf("%w: unsupported user_version %d", ErrInvalidSchema, userVersion)
 	}
 	var metadataVersion string
 	if err := q.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&metadataVersion); err != nil {
 		return fmt.Errorf("%w: read metadata schema version: %v", ErrInvalidSchema, err)
 	}
-	if metadataVersion != strconv.Itoa(SchemaVersion) {
+	if metadataVersion != strconv.Itoa(expectedVersion) {
 		return fmt.Errorf("%w: metadata schema version %q", ErrInvalidSchema, metadataVersion)
 	}
 
@@ -398,53 +477,40 @@ func validateSchema(ctx context.Context, q sqlReadWriter) error {
 		return fmt.Errorf("%w: inspect schema objects: %v", ErrInvalidSchema, err)
 	}
 	defer rows.Close()
-	tables := make(map[string]bool)
-	triggers := make(map[string]bool)
-	definitions := make(map[string]string)
+	definitions := make(map[schemaObjectKey]string)
 	for rows.Next() {
 		var objectType, name, definition string
 		if err := rows.Scan(&objectType, &name, &definition); err != nil {
 			return fmt.Errorf("%w: scan schema object: %v", ErrInvalidSchema, err)
 		}
-		switch objectType {
-		case "table":
-			tables[name] = true
-		case "trigger":
-			triggers[name] = true
-		}
-		definitions[name] = normalizeSchemaSQL(definition)
+		definitions[schemaObjectKey{objectType: objectType, name: name}] = normalizeSchemaSQL(definition)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("%w: inspect schema objects: %v", ErrInvalidSchema, err)
 	}
-	missing := missingObjects(tables, requiredTables)
-	missing = append(missing, missingObjects(triggers, requiredTriggers)...)
+	expectedDefinitions := expectedSchemaDefinitionsFor(expectedStatements)
+	var missing []string
+	for key := range expectedDefinitions {
+		if _, present := definitions[key]; !present {
+			missing = append(missing, key.objectType+" "+key.name)
+		}
+	}
 	if len(missing) != 0 {
 		sort.Strings(missing)
 		return fmt.Errorf("%w: missing required objects: %s", ErrInvalidSchema, strings.Join(missing, ", "))
 	}
-	expectedDefinitions := expectedSchemaDefinitions()
-	for name, expected := range expectedDefinitions {
-		if definitions[name] != expected {
-			return fmt.Errorf("%w: definition of %q differs from schema version %d", ErrInvalidSchema, name, SchemaVersion)
+	for key, expected := range expectedDefinitions {
+		if definitions[key] != expected {
+			return fmt.Errorf("%w: definition of %s %q differs from schema version %d",
+				ErrInvalidSchema, key.objectType, key.name, expectedVersion)
 		}
 	}
-	for name := range definitions {
-		if _, expected := expectedDefinitions[name]; !expected {
-			return fmt.Errorf("%w: unexpected schema object %q", ErrInvalidSchema, name)
+	for key := range definitions {
+		if _, expected := expectedDefinitions[key]; !expected {
+			return fmt.Errorf("%w: unexpected schema object %s %q", ErrInvalidSchema, key.objectType, key.name)
 		}
 	}
 	return nil
-}
-
-func missingObjects(have map[string]bool, required []string) []string {
-	var missing []string
-	for _, name := range required {
-		if !have[name] {
-			missing = append(missing, name)
-		}
-	}
-	return missing
 }
 
 func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -41,8 +42,10 @@ func (s *Store) Doctor(ctx context.Context) (DoctorReport, error) {
 	add("foreign keys", checkForeignKeys(ctx, tx), "no foreign-key violations")
 	add("metadata", checkMetadata(ctx, tx), "metadata keys and values are valid")
 	add("event payload digests", checkEventPayloadDigests(ctx, tx), "all event payload hashes match their stored bytes")
+	add("finding payload digests", checkFindingPayloadDigests(ctx, tx), "all finding payload hashes match their stored bytes")
 	add("run event sequences", checkRunSequences(ctx, tx), "event sequences are contiguous")
 	add("run terminal records", checkRunTerminalRecords(ctx, tx), "terminal events match their run projections")
+	add("finding records", checkFindingRecords(ctx, tx), "finding payloads and run links are internally consistent")
 
 	if err := tx.Commit(); err != nil {
 		return DoctorReport{}, fmt.Errorf("commit doctor snapshot: %w", err)
@@ -111,7 +114,7 @@ func checkMetadata(ctx context.Context, q sqlReadWriter) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read metadata: %w", err)
 	}
-	if len(values) != 2 || values["schema_version"] != "1" {
+	if len(values) != 2 || values["schema_version"] != strconv.Itoa(SchemaVersion) {
 		return fmt.Errorf("metadata rows are incomplete or unexpected")
 	}
 	if _, err := parseTime(values["created_at"]); err != nil {
@@ -139,6 +142,37 @@ func checkEventPayloadDigests(ctx context.Context, q sqlReadWriter) error {
 		}
 	}
 	return rows.Err()
+}
+
+func checkFindingPayloadDigests(ctx context.Context, q sqlReadWriter) error {
+	for _, table := range []string{"findings", "finding_closures"} {
+		rows, err := q.QueryContext(ctx, `SELECT id, payload, payload_sha256 FROM `+table+` ORDER BY id`)
+		if err != nil {
+			return fmt.Errorf("read %s payloads: %w", table, err)
+		}
+		for rows.Next() {
+			var id string
+			var payload, stored []byte
+			if err := rows.Scan(&id, &payload, &stored); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan %s payload: %w", table, err)
+			}
+			expected := payloadDigest(payload)
+			if !bytes.Equal(stored, expected) {
+				rows.Close()
+				return fmt.Errorf("%s record %q payload hash mismatch (stored %s, computed %s)",
+					table, id, hex.EncodeToString(stored), hex.EncodeToString(expected))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("read %s payloads: %w", table, err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close %s payloads: %w", table, err)
+		}
+	}
+	return nil
 }
 
 func checkRunSequences(ctx context.Context, q sqlReadWriter) error {
@@ -195,6 +229,55 @@ func checkRunTerminalRecords(ctx context.Context, q sqlReadWriter) error {
 		}
 		if err := validateSnapshotConsistency(Snapshot{Run: run, Events: events}); err != nil {
 			return fmt.Errorf("run %q: %w", runID, err)
+		}
+	}
+	return nil
+}
+
+func checkFindingRecords(ctx context.Context, q sqlReadWriter) error {
+	rows, err := q.QueryContext(ctx, `SELECT id FROM findings ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("list findings: %w", err)
+	}
+	var findingIDs []string
+	for rows.Next() {
+		var findingID string
+		if err := rows.Scan(&findingID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan finding ID: %w", err)
+		}
+		findingIDs = append(findingIDs, findingID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("list findings: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close finding list: %w", err)
+	}
+	for _, findingID := range findingIDs {
+		finding, err := getFinding(ctx, q, findingID)
+		if err != nil {
+			return err
+		}
+		origin, err := getRun(ctx, q, finding.OriginRunID)
+		if err != nil {
+			return fmt.Errorf("finding %q origin: %w", finding.ID, err)
+		}
+		if origin.State != RunClosed {
+			return fmt.Errorf("finding %q origin run %q is not closed", finding.ID, origin.ID)
+		}
+		if finding.Closure == nil {
+			continue
+		}
+		if finding.Closure.Disposition == DispositionResolved {
+			resolving, err := getRun(ctx, q, finding.Closure.ResolvingRunID)
+			if err != nil {
+				return fmt.Errorf("finding %q resolution: %w", finding.ID, err)
+			}
+			if resolving.State != RunClosed || resolving.Outcome != OutcomeSuccess {
+				return fmt.Errorf("finding %q resolving run %q is not closed with outcome success", finding.ID, resolving.ID)
+			}
 		}
 	}
 	return nil

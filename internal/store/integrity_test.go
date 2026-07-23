@@ -6,6 +6,13 @@ func TestDatabaseGuardsRejectDirectMutation(t *testing.T) {
 	ledger := openTestStore(t)
 	startTestRun(t, ledger, "run_guard")
 	closeTestRun(t, ledger, "run_guard")
+	addTestFinding(t, ledger, "finding_guard", "run_guard", "Guard finding rows")
+	if _, err := ledger.CloseFinding(t.Context(), "finding_guard", CloseFindingParams{
+		ID: "closure_guard", Disposition: DispositionDismissed,
+		Content: FindingClosureContent{Note: "Guard closure rows."},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	attempts := []struct {
 		name string
@@ -18,6 +25,10 @@ func TestDatabaseGuardsRejectDirectMutation(t *testing.T) {
 		{"update terminal", `UPDATE runs SET outcome = 'failure' WHERE id = 'run_guard'`},
 		{"delete metadata", `DELETE FROM metadata WHERE key = 'schema_version'`},
 		{"update metadata", `UPDATE metadata SET value = '2' WHERE key = 'schema_version'`},
+		{"delete finding", `DELETE FROM findings WHERE id = 'finding_guard'`},
+		{"update finding", `UPDATE findings SET payload = '{}' WHERE id = 'finding_guard'`},
+		{"delete finding closure", `DELETE FROM finding_closures WHERE id = 'closure_guard'`},
+		{"update finding closure", `UPDATE finding_closures SET payload = '{}' WHERE id = 'closure_guard'`},
 	}
 	for _, attempt := range attempts {
 		t.Run(attempt.name, func(t *testing.T) {
