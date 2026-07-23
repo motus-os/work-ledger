@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -448,6 +449,41 @@ func TestWrapCancellationStillClosesRun(t *testing.T) {
 	if runs[0].State != store.RunClosed || runs[0].Outcome != store.OutcomeAborted || runs[0].TimedOut == nil || *runs[0].TimedOut {
 		t.Fatalf("canceled run = %#v", runs[0])
 	}
+}
+
+func TestProcessSignalCauseDeterminesCLIExitStatus(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cliTestSignalCause(15))
+	var stderr bytes.Buffer
+
+	code := Run(ctx, []string{"version"}, testEnvironment(t.TempDir(), io.Discard, &stderr))
+
+	if code != 143 {
+		t.Fatalf("signal-canceled CLI exit = %d, want 143", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("signal-canceled CLI stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestCommandErrorDoesNotPrintContextCancellation(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := commandError(&stderr, fmt.Errorf("operation: %w", context.Canceled)); code != 1 {
+		t.Fatalf("command error exit = %d, want 1", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("canceled command stderr = %q, want empty", stderr.String())
+	}
+}
+
+type cliTestSignalCause int
+
+func (cliTestSignalCause) Error() string {
+	return "test process signal"
+}
+
+func (cause cliTestSignalCause) SignalNumber() int {
+	return int(cause)
 }
 
 func TestListMissingStoreAndUsage(t *testing.T) {

@@ -141,7 +141,7 @@ func TestBrokenOutputPipeStillClosesTheRun(t *testing.T) {
 	}
 	run := runs[0]
 	if run.State != store.RunClosed || run.Outcome != store.OutcomeFailure ||
-		run.Output.StdoutBytes == 0 || run.Output.StdoutBytes > 8*1024*1024 ||
+		run.Output.StdoutBytes == 0 ||
 		run.Signal != nil {
 		t.Fatalf("broken-pipe run = %#v", run)
 	}

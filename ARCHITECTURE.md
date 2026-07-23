@@ -81,7 +81,9 @@ Motus does not run a command if it cannot create the open record. After a
 command starts, a downstream output failure terminates the supervised process
 group or Job Object, waits for output forwarding to finish, then closes the run
 as failed. Cancellation follows the same process-tree boundary and closes the
-run as aborted.
+run as aborted. A signal received after the command has completed still
+determines Motus's process exit status, but does not replace the recorded
+command outcome.
 
 An abrupt Motus crash can leave an open run. Committed events remain valid and
 ordered. The first release does not guess how an interrupted run should be

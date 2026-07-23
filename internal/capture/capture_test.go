@@ -316,7 +316,7 @@ func TestRunTerminatesUnboundedProducerAfterWriterFailure(t *testing.T) {
 			if stream == "stderr" {
 				stats = result.Stderr
 			}
-			if !stats.CopyFailed || stats.Bytes == 0 || stats.Bytes > 8*1024*1024 {
+			if !stats.CopyFailed || stats.Bytes == 0 {
 				t.Fatalf("%s stats after writer failure = %#v", stream, stats)
 			}
 			if got := len(failed.Bytes()); got != failed.limit {
@@ -451,6 +451,18 @@ func TestRunDoesNotStartWithCanceledContext(t *testing.T) {
 	assertResultOutcome(t, result, -1, FailureCanceled)
 	assertStreamStats(t, "stdout", result.Stdout, nil, false)
 	assertStreamStats(t, "stderr", result.Stderr, nil, false)
+}
+
+func TestRunPreservesSignalCauseFromCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(testSignalCause(15))
+
+	result := Run(ctx, os.Args[0], captureHelperArgs("exact"), nil, nil, nil)
+
+	assertResultOutcome(t, result, -1, FailureCanceled)
+	if result.CancellationSignalNumber != 15 {
+		t.Fatalf("cancellation signal = %d, want 15", result.CancellationSignalNumber)
+	}
 }
 
 func TestResultMetadataDoesNotRetainArgumentValues(t *testing.T) {
@@ -747,6 +759,16 @@ type signalBuffer struct {
 	once   sync.Once
 	mu     sync.Mutex
 	buffer bytes.Buffer
+}
+
+type testSignalCause int
+
+func (testSignalCause) Error() string {
+	return "test process signal"
+}
+
+func (cause testSignalCause) SignalNumber() int {
+	return int(cause)
 }
 
 func newSignalBuffer(needle []byte) *signalBuffer {

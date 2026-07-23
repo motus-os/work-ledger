@@ -111,6 +111,7 @@ func Run(
 
 	if err := ctx.Err(); err != nil {
 		result.Failures |= contextFailure(err)
+		result.CancellationSignalNumber = signals.CancellationNumber(ctx)
 		return result
 	}
 
@@ -193,7 +194,7 @@ func Run(
 
 	result.Stdout = stdoutCounter.stats()
 	result.Stderr = stderrCounter.stats()
-	if cmd.ProcessState != nil {
+	if cmd.ProcessState != nil && !contextFinished && !outputTerminated {
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	}
 
