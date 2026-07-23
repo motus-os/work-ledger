@@ -7,7 +7,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not include credentials, command arguments, raw output, transcripts, or private repository data. Report vulnerabilities through the private Security Advisory form instead.
+        Do not include credentials, sensitive command argument values, unsanitized raw output, transcripts, or private repository data.
+        Report vulnerabilities through the private Security Advisory form instead.
   - type: input
     id: version
     attributes:

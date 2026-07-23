@@ -1,27 +1,28 @@
 # Architecture
 
-Motus Work Ledger is one command-line program and one project-local SQLite
-database. Version 1 has no server, account, plugin host, background process, or
-telemetry client.
+Motus Work Ledger is one command-line program backed by one project-local
+SQLite database. It runs on demand without a server or background service.
 
 ## Command flow
 
 ```text
-motus wrap -- command args
-          |
-          +-- read Git metadata with output and time limits
-          +-- create an open run
-          +-- start the command directly, without a shell
-          +-- forward stdin and copy stdout and stderr through pipes
-          +-- count bytes and newline delimiters while streams are copied
-          +-- close the run and append its terminal event in one transaction
-          +-- print the run ID and receipt command
+                         +--> child process --> stdout/stderr --> terminal or CI
+command + arguments --> motus wrap
+                         +--> metadata + output counts --> .motus/ledger.db
+                                                                  |
+                                                                  v
+                                                       motus run receipt
+                                                                  |
+                                                                  v
+                                                                 JSON
 ```
 
-The command arguments and stdin are passed to the process but are not copied
-into a Motus record. Raw output is forwarded and counted, not buffered in the
-ledger. A program can detect that its stdout and stderr are pipes, so formatting
-can differ from a direct invocation.
+Motus reads Git metadata, creates an open run, and starts the command directly
+without a shell. Command arguments and stdin reach the child process but are
+not copied into a Motus record. Raw output is forwarded and counted, not
+buffered in the ledger. Closing the run appends its terminal event and updates
+the run projection in one transaction. A program can detect that its stdout and
+stderr are pipes, so formatting can differ from a direct invocation.
 
 Findings use a separate, explicit path:
 
@@ -51,8 +52,8 @@ findings by watching output or inferring a lesson from a run.
 - `internal/store` owns the SQLite schema, transactions, projections, and
   consistency checks.
 
-The packages are internal because the first release promises a command-line
-interface and file format, not a stable Go library API.
+The packages are internal because Motus promises a command-line interface and
+file format, not a stable Go library API.
 
 ## Store
 
@@ -106,12 +107,11 @@ determines Motus's process exit status, but does not replace the recorded
 command outcome.
 
 An abrupt Motus crash can leave an open run. Committed events remain valid and
-ordered. The first release does not guess how an interrupted run should be
-closed.
+ordered, and the run remains open for inspection.
 
 ## Deliberate boundaries
 
-The first release does not include:
+Version 0.1 does not include:
 
 - transcript or raw-output capture
 - a daemon or automatic observation
@@ -119,5 +119,5 @@ The first release does not include:
 - workflow orchestration
 - automatic findings, recommendations, or model-based retrieval
 
-Those capabilities require separate evidence and contracts. They are not
-implied by the ledger foundation.
+This keeps version 0.1 focused on local command records, receipts, and
+explicitly authored findings.
