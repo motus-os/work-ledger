@@ -12,8 +12,7 @@ receipt you can read later.
 
 ## Try it from source
 
-Motus has not reached its first public release. Build the current source with
-Go 1.26.5:
+Build the current source with Go 1.26.5:
 
 ```console
 $ go build -o ./bin/motus ./cmd/motus
