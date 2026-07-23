@@ -1,14 +1,14 @@
 # Motus Work Ledger
 
-Motus records command runs in a local SQLite ledger. It keeps the command name,
-timing, Git state, output counts, exit status, and outcome without storing the
-command's arguments or raw output. When a run exposes something worth keeping,
-you can connect a short finding to it and later connect the fix to a successful
-run.
+Motus records command runs in a local SQLite ledger. It keeps the executable
+name, timing, Git context, output counts, exit status, and outcome without
+storing argument values or raw output. When a run exposes something worth
+keeping, you can connect a short finding to it and later close that finding
+with a successful run.
 
 Terminal scrollback disappears and CI logs live in separate systems. Motus
-gives those runs one local index, searchable findings, and a deterministic JSON
-receipt you can read later.
+gives those runs one local index, searchable findings, and deterministic JSON
+receipts for closed runs.
 
 ## Try it from source
 
@@ -36,31 +36,37 @@ PASS  state path: state directory and database paths pass local safety checks
 Scope: local consistency only; producer-controlled records are not independently authenticated.
 ```
 
-If a run exposed a useful failure, record the finding through standard input.
-The text is read by Motus, not parsed as a command-line value. Type one line,
-then press Ctrl-D to finish:
+If a failed wrapped run exposed something worth keeping, record the finding
+through standard input. The text is read by Motus, not parsed as a command-line
+value. In this example, `run_failed...` is the ID printed by the failed run.
+Type one line, then press Ctrl-D to finish:
 
 ```console
-$ ./bin/motus finding add --run run_7e2f... --file -
+$ ./bin/motus finding add --run run_failed... --file -
 The retry reused stale generated state.
 Recorded finding_91ac... (open)
-Run: run_7e2f...
+Run: run_failed...
 Summary: The retry reused stale generated state.
 
 $ ./bin/motus finding list --state open
 FINDING ID       STATE  RECORDED (UTC)         ORIGIN RUN   SUMMARY
-finding_91ac...  open   2026-07-21T17:31:05Z  run_7e2f...  The retry reused stale generated state.
+finding_91ac...  open   2026-07-21T17:31:05Z  run_failed... The retry reused stale generated state.
 ```
 
-After a successful fix run, close the finding with `finding close`. Motus keeps
-the original finding and appends a separate closure instead of rewriting it.
+Run the fix through `motus wrap`. If it succeeds, close the finding with that
+run's ID:
 
-`motus wrap` starts the command directly, without a shell. It forwards stdin
-and copies stdout and stderr to their original destinations. Motus records byte
-and newline counts observed before the command finishes or Motus terminates it.
-Because output is copied through pipes, a program that checks for a terminal
-can format its output differently than it would when run directly. If an
-output destination closes, Motus stops the command tree and records a failure.
+```console
+$ ./bin/motus finding close finding_91ac... \
+    --disposition resolved --run run_fixed... --file -
+Regenerated the file before the test.
+(press Ctrl-D)
+Closed finding_91ac... (resolved)
+Resolving run: run_fixed...
+```
+
+Motus keeps the original finding and appends a separate closure instead of
+rewriting it.
 
 ## What is recorded
 
@@ -102,16 +108,25 @@ motus version                    Print version information
 Add `.motus/` to the project's ignore file if the ledger should remain outside
 version control.
 
+### Wrapped command behavior
+
+`motus wrap` starts the command directly, without a shell. It forwards stdin
+and copies stdout and stderr to their original destinations. Motus records byte
+and newline counts observed before the command finishes or Motus terminates it.
+Because output is copied through pipes, a program that checks for a terminal
+can format its output differently than it would when run directly. If an
+output destination closes, Motus stops the command tree and records a failure.
+
 ## Trust boundary
 
 A Motus receipt is a producer-controlled process record. Findings are also
 producer-controlled records: their text is authored, not independently
-verified or inferred by Motus. Database triggers
-block ordinary updates and deletes, and `motus doctor` checks the current
-schema, hashes, sequences, foreign keys, terminal records, and finding links. A person who
-controls the database file can replace those controls and rewrite a
-self-consistent history. Motus does not sign records, provide an independent
-observation, or prove that the recorded work was correct.
+verified or inferred by Motus. Database triggers block ordinary updates and
+deletes, and `motus doctor` checks the current schema, hashes, sequences,
+foreign keys, terminal records, and finding links. A person who controls the
+database file can replace those controls and rewrite a self-consistent history.
+Motus does not sign records, provide an independent observation, or prove that
+the recorded work was correct.
 
 The receipt states this boundary as `"trust_model":"producer-controlled"`.
 See [SECURITY.md](SECURITY.md) for the full security model and
