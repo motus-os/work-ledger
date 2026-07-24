@@ -74,6 +74,10 @@ Confirm the installed command:
 $ motus version
 ```
 
+Motus stores this project's ledger at `.motus/ledger.db`. Add `.motus/` to
+`.gitignore` before recording work. Finding text is content you submit, so
+review it before saving.
+
 ## Record a failure and what worked next
 
 This example uses `npm test`. Replace it with any test, build, script, or tool
@@ -168,15 +172,19 @@ note, and links to both runs.
 
 ## Use Motus with an agent
 
-Any agent that can run project commands can use Motus. Keep the workflow
-selective:
+Any agent that can run project commands can use Motus. Add this to the
+project's `AGENTS.md` or equivalent:
 
-1. Search relevant open and resolved findings before work where an earlier
-   failure may matter.
-2. Run meaningful tests, builds, scripts, or release checks through
-   `motus wrap`.
-3. Add a structured finding when the failure produced a lesson worth reusing.
-4. Close the finding only after a successful recorded run addresses it.
+```markdown
+## Motus
+
+- Search open and resolved Motus findings before work where an earlier failure
+  may help.
+- Run meaningful tests, builds, scripts, and release checks through
+  `motus wrap`.
+- Record a finding only when the work produced guidance worth reusing.
+- Resolve a finding only with a successful recorded run that addresses it.
+```
 
 The agent or operator chooses what deserves a durable record. Motus does not
 inspect a conversation or infer a lesson.
@@ -217,9 +225,6 @@ motus finding close [OPTIONS]    Resolve or dismiss a finding
 motus doctor [--json]            Check local ledger consistency
 motus version                    Print version information
 ```
-
-Add `.motus/` to the project's ignore file if the ledger should remain outside
-version control.
 
 ### Wrapped command behavior
 
