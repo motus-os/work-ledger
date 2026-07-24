@@ -1,12 +1,14 @@
 # Motus Work Ledger
 
-Motus is a local ledger for command failures and fixes. It records selected
-facts about a command run, lets you add an explanation, and links that finding
-to a later successful run. Search the ledger when the problem returns.
+Logs show what happened. Motus keeps what you choose to save from the work.
 
-Git records source changes and logs record output. Motus gives the failed run,
-your explanation, and the successful run stable IDs in one local SQLite
-database. Closed runs also have repeatable JSON receipts.
+Motus records selected facts about a command run. After a failure, you can add
+a summary, likely cause, and next step, then link that finding to a later
+successful run. Search the ledger when the problem returns.
+
+Git shows what changed. Shell history and CI show what ran. Motus gives the
+failed run, your explanation, and the successful run stable IDs in one local
+SQLite database. Closed runs also have repeatable JSON receipts.
 
 ## Install
 
@@ -112,6 +114,21 @@ Run: run_0370...
 Summary: The generated file was stale.
 ```
 
+The plain-text form records one summary. When another operator or agent may
+need the reasoning later, use JSON to include the likely cause and next step:
+
+```console
+$ motus finding add --run run_0370... --format json --file -
+{
+  "summary": "The generated file was stale.",
+  "hypothesis": "Generation did not run before the test.",
+  "next_step": "Regenerate the file, then rerun the test."
+}
+Recorded finding_1457... (open)
+Run: run_0370...
+Summary: The generated file was stale.
+```
+
 ### 3. Record the successful check
 
 Fix the problem, then run the same command through Motus. Keep the new run ID
@@ -145,6 +162,24 @@ finding_1457...  resolved  2026-07-24T18:51:48Z  run_0370...  The generated file
 
 $ motus finding show finding_1457...
 ```
+
+The full finding shows the authored summary, likely cause, next step, closure
+note, and links to both runs.
+
+## Use Motus with an agent
+
+Any agent that can run project commands can use Motus. Keep the workflow
+selective:
+
+1. Search relevant open and resolved findings before work where an earlier
+   failure may matter.
+2. Run meaningful tests, builds, scripts, or release checks through
+   `motus wrap`.
+3. Add a structured finding when the failure produced a lesson worth reusing.
+4. Close the finding only after a successful recorded run addresses it.
+
+The agent or operator chooses what deserves a durable record. Motus does not
+inspect a conversation or infer a lesson.
 
 ## Data Motus keeps
 
