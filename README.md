@@ -1,13 +1,12 @@
 # Motus Work Ledger
 
-Motus keeps the fix with the failure. It records selected facts about a
-command run, lets you add the reason the failure mattered, and connects that
-finding to the successful run that resolved it.
+Motus is a local ledger for command failures and fixes. It records selected
+facts about a command run, lets you add an explanation, and links that finding
+to a later successful run. Search the ledger when the problem returns.
 
-Git records source changes, not whether a selected command ran or how it
-ended. Terminal scrollback disappears and CI logs live elsewhere. Motus gives
-selected runs stable IDs, searchable findings, and deterministic JSON receipts
-for closed runs, all in a local SQLite ledger.
+Git records source changes and logs record output. Motus gives the failed run,
+your explanation, and the successful run stable IDs in one local SQLite
+database. Closed runs also have repeatable JSON receipts.
 
 ## Install
 
@@ -73,63 +72,81 @@ Confirm the installed command:
 $ motus version
 ```
 
-## Keep a failure and its fix
+## Record a failure and what worked next
 
-Run a test, build, script, or tool through Motus. The wrapped command still
-writes to the terminal. Motus normally returns its exit status; an output-copy
-failure returns Motus's internal failure status instead. The transcript below
-is condensed, uses shortened output IDs, and uses `YOUR_COMMAND` as a
-placeholder for the command you want to run. Uppercase values are placeholders.
+This example uses `npm test`. Replace it with any test, build, script, or tool
+you already run. A run is one command execution recorded by Motus. A finding
+is a short note about a failure: what happened, the likely cause, or the next
+step.
+
+Every run gets a `run_` ID. Every finding gets a `finding_` ID. Those IDs
+connect the failed run, your note, and the successful run after the fix. The
+examples below use shortened IDs.
+
+### 1. Record the failed command
 
 ```console
-$ motus wrap -- YOUR_COMMAND
-motus: recorded run_0d27... (failure)
+$ motus wrap -- npm test
+motus: recorded run_0370... (failure)
 Keep why this failed:
-  motus --state-dir /work/project/.motus finding add --run run_0d27... --file -
+  motus --state-dir /work/project/.motus finding add --run run_0370... --file -
 
 Inspect the run:
-  motus --state-dir /work/project/.motus run receipt run_0d27...
+  motus --state-dir /work/project/.motus run receipt run_0370...
 ```
 
-Use the printed command to keep the explanation. Finding text is read from a
-file or standard input, not from a command-line argument. Type one line, then
-press Ctrl-D on macOS or Linux. On Windows, press Ctrl-Z and then Enter.
+Motus shows the command's output normally and returns its exit status. After a
+failure, it prints the exact command for adding a finding.
+
+### 2. Add a finding
+
+Copy the printed command. Finding text is read from a file or standard input,
+not from a command-line argument. Type one short note, then press Ctrl-D on
+macOS or Linux. On Windows, press Ctrl-Z and then Enter.
 
 ```console
-$ motus finding add --run FAILED_RUN_ID --file -
+$ motus finding add --run run_0370... --file -
 The generated file was stale.
-Recorded finding_c896... (open)
-Run: run_0d27...
+Recorded finding_1457... (open)
+Run: run_0370...
 Summary: The generated file was stale.
 ```
 
-Make the change, then run the same check through Motus. After it succeeds,
-connect the finding to that run. Enter the closure note through standard input
-and finish it with the same EOF key sequence.
+### 3. Record the successful check
+
+Fix the problem, then run the same command through Motus. Keep the new run ID
+if it succeeds.
 
 ```console
-$ motus wrap -- YOUR_COMMAND
-motus: recorded run_c0e5... (success)
-
-$ motus finding close FINDING_ID --disposition resolved --run SUCCESS_RUN_ID --file -
-Refreshed the generated file before running the check.
-Closed finding_c896... (resolved)
-Resolving run: run_c0e5...
+$ motus wrap -- npm test
+motus: recorded run_c588... (success)
 ```
 
-Motus keeps the original finding and appends a separate closure instead of
-rewriting it. When the problem returns, search your own words and inspect both
-runs:
+### 4. Link the finding to the successful run
+
+Use the finding ID from step 2 and the successful run ID from step 3. Enter a
+short closure note and finish input with the same EOF key sequence.
+
+```console
+$ motus finding close finding_1457... --disposition resolved --run run_c588... --file -
+Refreshed the generated file before running the check.
+Closed finding_1457... (resolved)
+Resolving run: run_c588...
+```
+
+Motus leaves the original finding unchanged and adds a separate closure.
+
+### 5. Search when the problem returns
 
 ```console
 $ motus finding list --query stale
 FINDING ID       STATE     RECORDED (UTC)         ORIGIN RUN   SUMMARY
-finding_c896...  resolved  2026-07-24T14:32:11Z  run_0d27...  The generated file was stale.
+finding_1457...  resolved  2026-07-24T18:51:48Z  run_0370...  The generated file was stale.
 
-$ motus finding show finding_c896...
+$ motus finding show finding_1457...
 ```
 
-## What is recorded
+## Data Motus keeps
 
 - a random run ID and timestamps
 - the executable's base name and argument count
@@ -137,7 +154,7 @@ $ motus finding show finding_c896...
 - stdout and stderr byte and newline counts
 - exit code or terminating signal when available, and outcome
 - structured run events created by Motus
-- finding summaries, hypotheses, next steps, and closure notes that you
+- finding summaries, likely causes, next steps, and closure notes that you
   explicitly supply
 
 Motus does not store command argument values, wrapped-command stdin, raw stdout
@@ -155,14 +172,14 @@ Motus creates state directories with private POSIX permissions. If you create
 a custom state directory yourself, restrict it to the current user before use.
 
 ```text
-motus wrap -- COMMAND [ARG ...]  Run a command and record selected metadata
+motus wrap -- COMMAND [ARG ...]  Run a command and record selected facts
 motus run list [OPTIONS]         List and filter recorded runs
 motus run receipt RUN_ID         Write a JSON receipt for a closed run
-motus finding add [OPTIONS]      Connect an authored finding to a run
+motus finding add [OPTIONS]      Add a finding to a closed run
 motus finding list [OPTIONS]     List and search findings
 motus finding show FINDING_ID    Show a finding and its run context
 motus finding close [OPTIONS]    Resolve or dismiss a finding
-motus doctor [--json]            Check local database consistency
+motus doctor [--json]            Check local ledger consistency
 motus version                    Print version information
 ```
 
@@ -182,18 +199,16 @@ capabilities it would have when run directly; Motus is not a sandbox.
 
 ## Trust boundary
 
-A Motus receipt is a producer-controlled process record. Findings are also
-producer-controlled records: their text is authored, not independently
-verified or inferred by Motus. Database triggers block ordinary updates and
-deletes, and `motus doctor` checks the current schema, hashes, sequences,
-foreign keys, terminal records, and finding links. A person who controls the
-database file can replace those controls and rewrite a self-consistent history.
-Motus does not sign records, provide an independent observation, or prove that
-the recorded work was correct.
+A receipt reports what the local ledger says about a run. Finding text comes
+from whoever submits it; Motus does not infer or verify it. SQLite rules block
+normal changes, and `motus doctor` checks for inconsistencies, but anyone who
+controls the database file can rewrite it.
 
-The receipt states this boundary as `"trust_model":"producer-controlled"`.
-See [SECURITY.md](SECURITY.md) for the full security model and
-[ARCHITECTURE.md](ARCHITECTURE.md) for the data flow and storage design.
+Motus does not sign records or observe the command independently. Receipts
+identify this boundary as `"trust_model":"producer-controlled"`; they do not
+prove that the work was correct. See [SECURITY.md](SECURITY.md) for the full
+security model and [ARCHITECTURE.md](ARCHITECTURE.md) for the data flow and
+storage design.
 
 ## Development
 

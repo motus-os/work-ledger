@@ -52,8 +52,8 @@ findings by watching output or inferring a lesson from a run.
 - `internal/store` owns the SQLite schema, transactions, projections, and
   consistency checks.
 
-The packages are internal because Motus promises a command-line interface and
-file format, not a stable Go library API.
+The packages are internal. Only the command-line interface and file format are
+supported interfaces.
 
 ## Store
 
@@ -109,7 +109,7 @@ command outcome.
 An abrupt Motus crash can leave an open run. Committed events remain valid and
 ordered, and the run remains open for inspection.
 
-## Deliberate boundaries
+## Scope
 
 Version 0.1 does not include:
 
@@ -119,5 +119,5 @@ Version 0.1 does not include:
 - workflow orchestration
 - automatic findings, recommendations, or model-based retrieval
 
-This keeps version 0.1 focused on local command records, receipts, and
-explicitly authored findings.
+Version 0.1 is limited to local command records, receipts, and findings that a
+user chooses to add.
