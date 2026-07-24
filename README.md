@@ -1,73 +1,132 @@
 # Motus Work Ledger
 
-Motus records command runs in a local SQLite ledger. It keeps the executable
-name, timing, Git context, output counts, exit status, and outcome without
-storing argument values or raw output. When a run exposes something worth
-keeping, you can connect a short finding to it and later close that finding
-with a successful run.
+Motus keeps the fix with the failure. It records selected facts about a
+command run, lets you add the reason the failure mattered, and connects that
+finding to the successful run that resolved it.
 
 Git records source changes, not whether a selected command ran or how it
 ended. Terminal scrollback disappears and CI logs live elsewhere. Motus gives
 selected runs stable IDs, searchable findings, and deterministic JSON receipts
-for closed runs.
+for closed runs, all in a local SQLite ledger.
 
-## Try it from source
+## Install
 
-Build the current source with Go 1.26.5:
+With Go 1.26.5 or newer:
 
 ```console
-$ go build -o ./bin/motus ./cmd/motus
-$ ./bin/motus wrap -- go test ./...
-ok      github.com/example/project  0.42s
-motus: recorded run_7e2f... (success)
-Next: ./bin/motus --state-dir /work/project/.motus run receipt run_7e2f...
+$ go install github.com/motus-os/work-ledger/cmd/motus@latest
 ```
 
-Then list and inspect the record:
+Go places the binary in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is unset.
+Make sure that directory is on your `PATH`.
+
+Prebuilt archives are available from the
+[latest release](https://github.com/motus-os/work-ledger/releases/latest).
+Each release includes SHA-256 checksums, SBOMs, and GitHub artifact
+attestations. Verify the archive, unpack it, and place `motus` or `motus.exe`
+on your `PATH`.
+
+<details>
+<summary>Verify a release archive</summary>
+
+Replace `ARCHIVE_NAME` with the exact downloaded filename.
+Attestation verification uses the
+[GitHub CLI](https://cli.github.com/).
+
+On macOS:
 
 ```console
-$ ./bin/motus run list
-RUN ID      STATE   OUTCOME  STARTED (UTC)         COMMAND
-run_7e2f... closed  success  2026-07-21T17:27:33Z  go
-
-$ ./bin/motus run receipt run_7e2f... > receipt.json
-$ ./bin/motus doctor
-PASS  state path: state directory and database paths pass local safety checks
-...
-Scope: local consistency only; producer-controlled records are not independently authenticated.
+$ grep "  ARCHIVE_NAME$" checksums.txt | shasum -a 256 -c -
+$ gh attestation verify ARCHIVE_NAME --repo motus-os/work-ledger
 ```
 
-If a failed wrapped run exposed something worth keeping, record the finding
-through standard input. The text is read by Motus, not parsed as a command-line
-value. In this example, `run_failed...` is the ID printed by the failed run.
-Type one line, then press Ctrl-D to finish:
+On Linux:
 
 ```console
-$ ./bin/motus finding add --run run_failed... --file -
-The retry reused stale generated state.
-Recorded finding_91ac... (open)
-Run: run_failed...
-Summary: The retry reused stale generated state.
-
-$ ./bin/motus finding list --state open
-FINDING ID       STATE  RECORDED (UTC)         ORIGIN RUN   SUMMARY
-finding_91ac...  open   2026-07-21T17:31:05Z  run_failed... The retry reused stale generated state.
+$ grep "  ARCHIVE_NAME$" checksums.txt | sha256sum -c -
+$ gh attestation verify ARCHIVE_NAME --repo motus-os/work-ledger
 ```
 
-Run the fix through `motus wrap`. If it succeeds, close the finding with that
-run's ID:
+On Windows PowerShell:
+
+```powershell
+$archive = "ARCHIVE_NAME"
+$expected = (Get-Content checksums.txt | Where-Object { $_ -like "*  $archive" }).Split()[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "checksum mismatch" }
+gh attestation verify $archive --repo motus-os/work-ledger
+```
+
+The macOS binaries are not Apple-notarized. After the checksum and GitHub
+attestation pass, remove a browser-added quarantine flag if Gatekeeper blocks
+the extracted binary:
 
 ```console
-$ ./bin/motus finding close finding_91ac... \
-    --disposition resolved --run run_fixed... --file -
-Regenerated the file before the test.
-(press Ctrl-D)
-Closed finding_91ac... (resolved)
-Resolving run: run_fixed...
+$ xattr -d com.apple.quarantine /path/to/motus
+```
+
+</details>
+
+Confirm the installed command:
+
+```console
+$ motus version
+```
+
+## Keep a failure and its fix
+
+Run a test, build, script, or tool through Motus. The wrapped command still
+writes to the terminal and returns its own exit status. The transcript below
+is condensed, uses shortened output IDs, and uses `YOUR_COMMAND` as a
+placeholder for the command you want to run. Uppercase values are placeholders.
+
+```console
+$ motus wrap -- YOUR_COMMAND
+motus: recorded run_0d27... (failure)
+Keep why this failed:
+  motus --state-dir /work/project/.motus finding add --run run_0d27... --file -
+
+Inspect the run:
+  motus --state-dir /work/project/.motus run receipt run_0d27...
+```
+
+Use the printed command to keep the explanation. Finding text is read from a
+file or standard input, not from a command-line argument. Type one line, then
+press Ctrl-D on macOS or Linux. On Windows, press Ctrl-Z and then Enter.
+
+```console
+$ motus finding add --run FAILED_RUN_ID --file -
+The generated file was stale.
+Recorded finding_c896... (open)
+Run: run_0d27...
+Summary: The generated file was stale.
+```
+
+Make the change, then run the same check through Motus. After it succeeds,
+connect the finding to that run. Enter the closure note through standard input
+and finish it with the same EOF key sequence.
+
+```console
+$ motus wrap -- YOUR_COMMAND
+motus: recorded run_c0e5... (success)
+
+$ motus finding close FINDING_ID --disposition resolved --run SUCCESS_RUN_ID --file -
+Refreshed the generated file before running the check.
+Closed finding_c896... (resolved)
+Resolving run: run_c0e5...
 ```
 
 Motus keeps the original finding and appends a separate closure instead of
-rewriting it.
+rewriting it. When the problem returns, search your own words and inspect both
+runs:
+
+```console
+$ motus finding list --query stale
+FINDING ID       STATE     RECORDED (UTC)         ORIGIN RUN   SUMMARY
+finding_c896...  resolved  2026-07-24T14:32:11Z  run_0d27...  The generated file was stale.
+
+$ motus finding show finding_c896...
+```
 
 ## What is recorded
 
@@ -76,12 +135,12 @@ rewriting it.
 - the Git repository name, commit, and pre-run dirty state when available
 - stdout and stderr byte and newline counts
 - exit code or terminating signal when available, and outcome
-- canonical event payloads created by Motus
+- structured run events created by Motus
 - finding summaries, hypotheses, next steps, and closure notes that you
   explicitly supply
 
-Motus does not store command argument values, command stdin, raw stdout or
-stderr, environment variables, source files, prompts, or agent transcripts.
+Motus does not store command argument values, wrapped-command stdin, raw stdout
+or stderr, environment variables, source files, prompts, or agent transcripts.
 Finding text is the exception: Motus stores the validated finding content you
 submit through a file or stdin. It does not send ledger data over the network.
 
@@ -117,6 +176,8 @@ and newline counts observed before the command finishes or Motus terminates it.
 Because output is copied through pipes, a program that checks for a terminal
 can format its output differently than it would when run directly. If an
 output destination closes, Motus stops the command tree and records a failure.
+The wrapped process keeps the same environment and operating-system
+capabilities it would have when run directly; Motus is not a sandbox.
 
 ## Trust boundary
 
