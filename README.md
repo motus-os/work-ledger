@@ -172,8 +172,9 @@ note, and links to both runs.
 
 ## Use Motus with an agent
 
-Any agent that can run project commands can use Motus. Add this to the
-project's `AGENTS.md` or equivalent:
+A person, coding agent, script, or CI job calls Motus from the workflow it
+already runs. Add this to the project's `AGENTS.md` or equivalent to make the
+expected agent workflow explicit:
 
 ```markdown
 ## Motus
@@ -185,6 +186,11 @@ project's `AGENTS.md` or equivalent:
 - Record a finding only when the work produced guidance worth reusing.
 - Resolve a finding only with a successful recorded run that addresses it.
 ```
+
+Scripts and CI jobs can call the same commands directly. Callers see the same
+records only when they use the same state directory. Preserve that private
+directory when a later CI job needs the records. Motus requires no separate
+service or vendor integration.
 
 The agent or operator chooses what deserves a durable record. Motus does not
 inspect a conversation or infer a lesson.
