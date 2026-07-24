@@ -76,7 +76,8 @@ $ motus version
 ## Keep a failure and its fix
 
 Run a test, build, script, or tool through Motus. The wrapped command still
-writes to the terminal and returns its own exit status. The transcript below
+writes to the terminal. Motus normally returns its exit status; an output-copy
+failure returns Motus's internal failure status instead. The transcript below
 is condensed, uses shortened output IDs, and uses `YOUR_COMMAND` as a
 placeholder for the command you want to run. Uppercase values are placeholders.
 
