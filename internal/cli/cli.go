@@ -249,12 +249,30 @@ func runWrap(ctx context.Context, arguments []string, stateDir string, environme
 		fmt.Fprintln(environment.Stderr)
 	}
 	fmt.Fprintf(environment.Stderr, "motus: recorded %s (%s)\n", runID, outcome)
-	fmt.Fprintf(environment.Stderr, "%s %s\n", nextCommandLabel(), displayCommand(
-		environment.ProgramName,
+	writeWrapNextSteps(environment.Stderr, environment.ProgramName, stateDir, runID, outcome)
+	return captureExitCode(result)
+}
+
+func writeWrapNextSteps(destination io.Writer, programName, stateDir, runID string, outcome store.Outcome) {
+	receiptCommand := displayCommand(
+		programName,
 		"--state-dir", stateDir,
 		"run", "receipt", runID,
-	))
-	return captureExitCode(result)
+	)
+	if outcome == store.OutcomeFailure {
+		fmt.Fprintln(destination, commandPromptLabel("Keep why this failed"))
+		fmt.Fprintf(destination, "  %s\n\n", displayCommand(
+			programName,
+			"--state-dir", stateDir,
+			"finding", "add",
+			"--run", runID,
+			"--file", "-",
+		))
+		fmt.Fprintln(destination, commandPromptLabel("Inspect the run"))
+		fmt.Fprintf(destination, "  %s\n", receiptCommand)
+		return
+	}
+	fmt.Fprintf(destination, "%s %s\n", nextCommandLabel(), receiptCommand)
 }
 
 func displayCommand(arguments ...string) string {
@@ -271,7 +289,7 @@ func displayCommandForPlatform(goos string, arguments ...string) string {
 	}
 	for _, argument := range arguments {
 		if argument != "" && strings.IndexFunc(argument, func(r rune) bool {
-			return !(r == '_' || r == '-' || r == '.' || r == '/' || r == '\\' || r == ':' ||
+			return !(r == '_' || r == '-' || r == '.' || r == '/' || r == ':' ||
 				r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z')
 		}) == -1 {
 			formatted = append(formatted, argument)
@@ -287,6 +305,13 @@ func nextCommandLabel() string {
 		return "Next (PowerShell):"
 	}
 	return "Next:"
+}
+
+func commandPromptLabel(label string) string {
+	if runtime.GOOS == "windows" {
+		return label + " (PowerShell):"
+	}
+	return label + ":"
 }
 
 type lastByteWriter struct {

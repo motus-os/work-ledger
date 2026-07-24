@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/motus-os/work-ledger/internal/store"
@@ -21,14 +22,15 @@ func TestDisplayCommandUsesPOSIXShellQuoting(t *testing.T) {
 		"`touch " + marker + "`",
 		"single'quote",
 		"space separated",
+		`path\segment`,
 	}
-	arguments := append([]string{"printf", "%s\\n%s\\n%s\\n%s\\n"}, values...)
+	arguments := append([]string{"printf", strings.Repeat("%s\\n", len(values))}, values...)
 	command := displayCommandForPlatform("linux", arguments...)
 	output, err := exec.Command("sh", "-c", command).Output()
 	if err != nil {
 		t.Fatalf("execute displayed command: %v; command=%q", err, command)
 	}
-	want := []byte(values[0] + "\n" + values[1] + "\n" + values[2] + "\n" + values[3] + "\n")
+	want := []byte(strings.Join(values, "\n") + "\n")
 	if !bytes.Equal(output, want) {
 		t.Fatalf("displayed command output = %q, want %q; command=%q", output, want, command)
 	}
