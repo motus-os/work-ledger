@@ -311,6 +311,20 @@ func TestWrapPreservesNonzeroExitAndClosesRun(t *testing.T) {
 		runs[0].ExitCode == nil || *runs[0].ExitCode != 7 {
 		t.Fatalf("failed run = %#v", runs[0])
 	}
+	runID := runs[0].ID
+	wantFinding := commandPromptLabel("Keep why this failed") + "\n  " + displayCommand(
+		"motus", "--state-dir", stateDir,
+		"finding", "add", "--run", runID, "--file", "-",
+	) + "\n"
+	wantReceipt := commandPromptLabel("Inspect the run") + "\n  " + displayCommand(
+		"motus", "--state-dir", stateDir,
+		"run", "receipt", runID,
+	) + "\n"
+	if !strings.Contains(stderr.String(), wantFinding) ||
+		!strings.Contains(stderr.String(), wantReceipt) ||
+		strings.Contains(stderr.String(), nextCommandLabel()) {
+		t.Fatalf("failed wrap guidance = %q", stderr.String())
+	}
 }
 
 func TestRunListFiltersAndPagination(t *testing.T) {
