@@ -124,6 +124,9 @@ func (s *Store) Close() error {
 func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string {
 	u := sqliteFileURL(database, runtime.GOOS == "windows")
 	q := u.Query()
+	// Install the busy handler before pragmas such as journal_mode that may
+	// contend when multiple processes open a new ledger at the same time.
+	q.Add("_pragma", "busy_timeout("+strconv.FormatInt(busyTimeout.Milliseconds(), 10)+")")
 	if readOnly {
 		q.Set("mode", "ro")
 		q.Add("_pragma", "query_only(ON)")
@@ -134,7 +137,6 @@ func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string
 		q.Add("_pragma", "journal_mode(WAL)")
 		q.Set("_txlock", "immediate")
 	}
-	q.Add("_pragma", "busy_timeout("+strconv.FormatInt(busyTimeout.Milliseconds(), 10)+")")
 	q.Add("_pragma", "foreign_keys(ON)")
 	q.Add("_pragma", "recursive_triggers(ON)")
 	q.Add("_pragma", "synchronous(FULL)")
