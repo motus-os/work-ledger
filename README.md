@@ -2,13 +2,12 @@
 
 Logs show what happened. Motus keeps what you choose to save from the work.
 
-Motus records selected facts about a command run. After a failure, you can add
-a summary, likely cause, and next step, then link that finding to a later
-successful run. Search the ledger when the problem returns.
+Motus records selected facts about a command run. Add an explanation or next
+step worth keeping. Search the note and inspect its run later.
 
-Git shows what changed. Shell history and CI show what ran. Motus gives the
-failed run, your explanation, and the successful run stable IDs in one local
-SQLite database. Closed runs also have repeatable JSON receipts.
+Git shows what changed. Shell history and CI show what ran. Motus stores the
+run and your note under stable IDs in one local SQLite database. A resolution
+can link a successful run. Closed runs have repeatable JSON receipts.
 
 ## Install
 
@@ -78,16 +77,16 @@ Motus stores this project's ledger at `.motus/ledger.db`. Add `.motus/` to
 `.gitignore` before recording work. Finding text is content you submit, so
 review it before saving.
 
-## Record a failure and what worked next
+## Example: record a failure and what worked next
 
 This example uses `npm test`. Replace it with any test, build, script, or tool
 you already run. A run is one command execution recorded by Motus. A finding
-is a short note about a failure: what happened, the likely cause, or the next
-step.
+is a short note you attach to a closed run: what happened, the likely cause, or
+what to try next. A failed test shows the full finding lifecycle.
 
 Every run gets a `run_` ID. Every finding gets a `finding_` ID. Those IDs
-connect the failed run, your note, and the successful run after the fix. The
-examples below use shortened IDs.
+connect a finding to its origin run and, when resolved, to a successful run.
+The examples below use shortened IDs.
 
 ### 1. Record the failed command
 
@@ -179,7 +178,7 @@ expected agent workflow explicit:
 ```markdown
 ## Motus
 
-- Search open and resolved Motus findings before work where an earlier failure
+- Search open and resolved Motus findings before work where an earlier finding
   may help.
 - Run meaningful tests, builds, scripts, and release checks through
   `motus wrap`.
