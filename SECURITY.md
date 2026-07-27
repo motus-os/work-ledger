@@ -28,6 +28,10 @@ application writes:
 definitions, SQLite integrity, foreign keys, metadata, payload hashes, event
 sequences, terminal records, and finding links.
 
+Release archives include GitHub artifact attestations. They can verify that an
+archive was built by this repository's release workflow. They do not attest to
+records or receipts created by a local Motus ledger.
+
 ## Trust boundary
 
 The database owner is outside the tamper-resistance boundary. An owner can drop
@@ -56,3 +60,8 @@ and never accepts finding or closure payloads as command-line values. File
 paths and `--query` search terms remain visible as command-line values. These
 controls reduce accidental exposure and unsafe terminal rendering; they do not
 make submitted content non-sensitive.
+
+SQLite may create `ledger.db-wal` and `ledger.db-shm` beside `ledger.db`.
+Back up, move, or remove the entire state directory as one unit while no Motus
+process is using it. Copies and backups remain readable to anyone who can
+access them.
