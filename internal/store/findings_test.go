@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -12,14 +15,19 @@ import (
 
 func addTestFinding(t *testing.T, ledger *Store, id, runID, summary string) Finding {
 	t.Helper()
+	return addTestFindingContent(t, ledger, id, runID, FindingContent{
+		Summary:    summary,
+		Hypothesis: "The cached state may be stale.",
+		NextStep:   "Reproduce with a clean cache.",
+	})
+}
+
+func addTestFindingContent(t *testing.T, ledger *Store, id, runID string, content FindingContent) Finding {
+	t.Helper()
 	finding, err := ledger.AddFinding(context.Background(), AddFindingParams{
 		ID:          id,
 		OriginRunID: runID,
-		Content: FindingContent{
-			Summary:    summary,
-			Hypothesis: "The cached state may be stale.",
-			NextStep:   "Reproduce with a clean cache.",
-		},
+		Content:     content,
 	})
 	if err != nil {
 		t.Fatalf("AddFinding() error = %v", err)
@@ -144,6 +152,242 @@ func TestFindingDismissalAndDeterministicListing(t *testing.T) {
 	}
 }
 
+func TestFindingMultiTermSearchRankingAndPagination(t *testing.T) {
+	ledger := openTestStore(t)
+	for _, runID := range []string{
+		"run_exact", "run_all_terms", "run_partial", "run_generic",
+		"run_tie_alpha", "run_tie_beta", "run_filtered",
+	} {
+		startTestRun(t, ledger, runID)
+		closeTestRun(t, ledger, runID)
+	}
+
+	fixtures := []struct {
+		at      time.Duration
+		id      string
+		runID   string
+		content FindingContent
+	}{
+		{
+			at:    10 * time.Second,
+			id:    "finding_exact",
+			runID: "run_exact",
+			content: FindingContent{
+				Summary:    "Repository history review used a shallow checkout",
+				Hypothesis: "The local clone did not contain the remote history.",
+				NextStep:   "Fetch the remote before counting commits.",
+			},
+		},
+		{
+			at:    11 * time.Second,
+			id:    "finding_all_terms",
+			runID: "run_all_terms",
+			content: FindingContent{
+				Summary:    "History count was incomplete",
+				Hypothesis: "The repository checkout was shallow.",
+				NextStep:   "Compare the local result with the remote.",
+			},
+		},
+		{
+			at:    12 * time.Second,
+			id:    "finding_partial",
+			runID: "run_partial",
+			content: FindingContent{
+				Summary:  "Repository branch protection review",
+				NextStep: "Inspect the protected branch settings.",
+			},
+		},
+		{
+			at:    13 * time.Second,
+			id:    "finding_generic_run",
+			runID: "run_generic",
+			content: FindingContent{
+				Summary:  "Run list output changed",
+				NextStep: "Compare the documented output.",
+			},
+		},
+		{
+			at:      14 * time.Second,
+			id:      "finding_tie_alpha",
+			runID:   "run_tie_alpha",
+			content: FindingContent{Summary: "Tieword alpha"},
+		},
+		{
+			at:      14 * time.Second,
+			id:      "finding_tie_beta",
+			runID:   "run_tie_beta",
+			content: FindingContent{Summary: "Tieword beta"},
+		},
+		{
+			at:      15 * time.Second,
+			id:      "finding_filtered",
+			runID:   "run_filtered",
+			content: FindingContent{Summary: "History review of the repository was retired"},
+		},
+	}
+	for _, fixture := range fixtures {
+		ledger.now = func() time.Time { return testEpoch.Add(fixture.at) }
+		addTestFindingContent(t, ledger, fixture.id, fixture.runID, fixture.content)
+	}
+	ledger.now = func() time.Time { return testEpoch.Add(16 * time.Second) }
+	if _, err := ledger.CloseFinding(context.Background(), "finding_filtered", CloseFindingParams{
+		ID:          "closure_filtered",
+		Disposition: DispositionDismissed,
+		Content:     FindingClosureContent{Note: "This test fixture is intentionally closed."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rankingTests := []struct {
+		query string
+		want  []string
+	}{
+		{
+			query: "repository history",
+			want:  []string{"finding_exact", "finding_filtered", "finding_all_terms", "finding_partial"},
+		},
+		{
+			query: "history, repository",
+			want:  []string{"finding_filtered", "finding_all_terms", "finding_exact", "finding_partial"},
+		},
+		{
+			query: "repository repository history",
+			want:  []string{"finding_filtered", "finding_all_terms", "finding_exact", "finding_partial"},
+		},
+	}
+	for _, test := range rankingTests {
+		got, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: test.query})
+		if err != nil {
+			t.Fatalf("ListFindings(%q) error = %v", test.query, err)
+		}
+		if ids := findingIDs(got); !reflect.DeepEqual(ids, test.want) {
+			t.Fatalf("ListFindings(%q) IDs = %v, want %v", test.query, ids, test.want)
+		}
+	}
+
+	page, err := ledger.ListFindings(context.Background(), ListFindingsOptions{
+		Query: "repository history", Limit: 2, Offset: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := findingIDs(page), []string{"finding_filtered", "finding_all_terms"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ranked page IDs = %v, want %v", got, want)
+	}
+
+	openOnly, err := ledger.ListFindings(context.Background(), ListFindingsOptions{
+		Query: "repository history", State: FindingOpen,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := findingIDs(openOnly), []string{"finding_exact", "finding_all_terms", "finding_partial"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("open ranked IDs = %v, want %v", got, want)
+	}
+
+	tied, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: "tieword"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := findingIDs(tied), []string{"finding_tie_alpha", "finding_tie_beta"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tie IDs = %v, want %v", got, want)
+	}
+
+	genericRun, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := findingIDs(genericRun), []string{"finding_generic_run"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("generic run query IDs = %v, want %v", got, want)
+	}
+	genericRunPrefix, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: "run_"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(genericRunPrefix) != 0 {
+		t.Fatalf("generic run prefix query IDs = %v, want none", findingIDs(genericRunPrefix))
+	}
+	for _, query := range []string{"find", "_"} {
+		found, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: query, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(found) != 0 {
+			t.Fatalf("generic identifier query %q IDs = %v, want none", query, findingIDs(found))
+		}
+	}
+	shortRun, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: "ru", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := findingIDs(shortRun), []string{"finding_generic_run"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("short run query IDs = %v, want authored-text match %v", got, want)
+	}
+
+	identifier, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: "run_all_terms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := findingIDs(identifier), []string{"finding_all_terms"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("identifier query IDs = %v, want %v", got, want)
+	}
+
+	punctuation, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: "---"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(punctuation) != 0 {
+		t.Fatalf("punctuation-only query returned %v", findingIDs(punctuation))
+	}
+}
+
+func TestFindingIdentifierFragmentSearchCompatibility(t *testing.T) {
+	ledger := openTestStore(t)
+	for _, runID := range []string{
+		"run_22222222aaaabbbb",
+		"run_44444444ccccdddd",
+	} {
+		startTestRun(t, ledger, runID)
+		closeTestRun(t, ledger, runID)
+	}
+	addTestFindingContent(t, ledger,
+		"finding_11111111aaaabbbb",
+		"run_22222222aaaabbbb",
+		FindingContent{Summary: "Identifier compatibility fixture"},
+	)
+	if _, err := ledger.CloseFinding(context.Background(), "finding_11111111aaaabbbb", CloseFindingParams{
+		ID:             "closure_33333333bbbbaaaa",
+		Disposition:    DispositionResolved,
+		ResolvingRunID: "run_44444444ccccdddd",
+		Content:        FindingClosureContent{Note: "Resolved for identifier search coverage."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, query := range []string{
+		"11111111aaaabbbb",
+		"22222222aaaabbbb",
+		"33333333bbbbaaaa",
+		"44444444ccccdddd",
+	} {
+		found, err := ledger.ListFindings(context.Background(), ListFindingsOptions{Query: query})
+		if err != nil {
+			t.Fatalf("ListFindings(%q) error = %v", query, err)
+		}
+		if got, want := findingIDs(found), []string{"finding_11111111aaaabbbb"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListFindings(%q) IDs = %v, want %v", query, got, want)
+		}
+	}
+}
+
+func findingIDs(findings []Finding) []string {
+	ids := make([]string, len(findings))
+	for index, finding := range findings {
+		ids[index] = finding.ID
+	}
+	return ids
+}
+
 func TestFindingValidationAndRunRequirements(t *testing.T) {
 	ledger := openTestStore(t)
 	startTestRun(t, ledger, "run_open_finding")
@@ -208,14 +452,28 @@ func TestFindingValidationAndRunRequirements(t *testing.T) {
 
 	for _, options := range []ListFindingsOptions{
 		{Limit: -1}, {Limit: 1001}, {Offset: -1}, {State: "unknown"}, {Query: "bad\nquery"},
+		{Query: uniqueFindingQueryTerms(65)},
 	} {
 		if _, err := ledger.ListFindings(context.Background(), options); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("ListFindings(%#v) error = %v, want ErrInvalid", options, err)
 		}
 	}
+	if _, err := ledger.ListFindings(context.Background(), ListFindingsOptions{
+		Query: uniqueFindingQueryTerms(64),
+	}); err != nil {
+		t.Fatalf("ListFindings(64 unique terms) error = %v", err)
+	}
 	if _, err := ledger.GetFinding(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetFinding(missing) error = %v, want ErrNotFound", err)
 	}
+}
+
+func uniqueFindingQueryTerms(count int) string {
+	terms := make([]string, count)
+	for index := range terms {
+		terms[index] = fmt.Sprintf("term%d", index)
+	}
+	return strings.Join(terms, " ")
 }
 
 func TestDoctorRejectsMalformedFindingPayloadsAndRunLinks(t *testing.T) {
@@ -483,5 +741,121 @@ func TestDoctorBoundaryAlsoAppliesToFindings(t *testing.T) {
 	finding, err := ledger.GetFinding(context.Background(), "finding_owner_boundary")
 	if err != nil || finding.Content.Summary != "Rewritten by database owner" {
 		t.Fatalf("rewritten finding = %#v, %v", finding, err)
+	}
+}
+
+func BenchmarkListFindingsQuery10K(b *testing.B) {
+	ctx := context.Background()
+	ledger, err := Open(ctx, filepath.Join(b.TempDir(), "state"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := ledger.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	dirty := false
+	if _, err := ledger.StartRun(ctx, StartRunParams{
+		ID: "run_benchmark", EventID: "run_benchmark_started", StartedAt: testEpoch,
+		Source: "benchmark", Producer: "motus", ExecutableBasename: "test",
+		Git: GitMetadata{Repository: "/work/project", Commit: strings.Repeat("a", 40), Dirty: &dirty},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	exitCode := 0
+	if _, err := ledger.CloseRun(ctx, "run_benchmark", CloseRunParams{
+		EventID: "run_benchmark_terminal", EndedAt: testEpoch.Add(time.Second),
+		Outcome: OutcomeSuccess, ExitCode: &exitCode,
+	}); err != nil {
+		b.Fatal(err)
+	}
+	tx, err := ledger.db.BeginTx(ctx, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := range 10_000 {
+		content := FindingContent{
+			Summary:  fmt.Sprintf("Dependency update %05d", index),
+			NextStep: "Run the focused checks before the full suite.",
+		}
+		switch {
+		case index%100 == 0:
+			content.Summary = fmt.Sprintf("Repository history review %05d", index)
+			content.Hypothesis = "The clone was shallow."
+			content.NextStep = "Fetch the remote history before counting commits."
+		case index%10 == 0:
+			content.Summary = fmt.Sprintf("Repository branch review %05d", index)
+		}
+		payload, err := canonicalFindingPayload(content)
+		if err != nil {
+			b.Fatal(err)
+		}
+		id := fmt.Sprintf("finding_benchmark_%05d", index)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO findings (
+            id, origin_run_id, payload, payload_sha256, recorded_at
+        ) VALUES (?, ?, ?, ?, ?)`,
+			id, "run_benchmark", payload, payloadDigest(payload),
+			formatTime(testEpoch.Add(time.Duration(index)*time.Millisecond)),
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		query string
+	}{
+		{name: "exact_phrase", query: "repository history"},
+		{name: "reordered_terms", query: "history repository"},
+		{name: "specific_record", query: "dependency update 09999"},
+		{name: "no_match", query: "absent phrase"},
+		{name: "maximum_terms", query: uniqueFindingQueryTerms(64)},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			for range b.N {
+				if _, err := ledger.ListFindings(ctx, ListFindingsOptions{
+					Query: test.query,
+					Limit: 20,
+				}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkFindingQueryMatchMaximumContent(b *testing.B) {
+	query, err := newFindingQuery(uniqueFindingQueryTerms(64))
+	if err != nil {
+		b.Fatal(err)
+	}
+	finding := Finding{
+		ID:          "finding_abcdef1234567890",
+		OriginRunID: "run_abcdef1234567890",
+		Content: FindingContent{
+			Summary:    strings.Repeat("s", maxFindingSummaryBytes),
+			Hypothesis: strings.Repeat("h", maxFindingTextBytes),
+			NextStep:   strings.Repeat("n", maxFindingTextBytes),
+		},
+		Closure: &FindingClosure{
+			ID:             "closure_abcdef1234567890",
+			ResolvingRunID: "run_1234567890abcdef",
+			Content: FindingClosureContent{
+				Note: strings.Repeat("c", maxFindingTextBytes),
+			},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	var result findingMatchScore
+	for range b.N {
+		result = query.match(finding)
+	}
+	if result.matched() {
+		b.Fatal("unexpected benchmark match")
 	}
 }

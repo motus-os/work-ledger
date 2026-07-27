@@ -219,12 +219,13 @@ using it.
 
 ## Search
 
-`motus finding list --query TEXT` performs a case-insensitive substring match
-over finding and closure IDs, origin and resolving run IDs, the summary,
-hypothesis, next step, and closure note. Results are deterministic and newest
-first. Add
-`--state open`, `--state resolved`, or `--state dismissed` to narrow the list.
-Use `--limit`, `--offset`, and `--json` for scripts and coding agents.
+`motus finding list --query TEXT` matches query terms case-insensitively across
+the summary, hypothesis, next step, and closure note. Full IDs and hexadecimal
+ID fragments of at least eight characters are searchable; ordinary words
+search finding text rather than generated IDs. Results matching the complete
+query or more terms appear first; ties are newest-first. Add `--state open`,
+`--state resolved`, or `--state dismissed` to narrow the list. Use `--limit`,
+`--offset`, and `--json` for scripts and coding agents.
 
 Search reads only the selected state directory. It does not search other
 clones, worktrees, or CI artifacts unless they use or restore that same state.

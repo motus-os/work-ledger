@@ -203,9 +203,11 @@ type CloseFindingParams struct {
 	Content        FindingClosureContent
 }
 
-// ListFindingsOptions controls deterministic newest-first listing. Limit
-// defaults to 100 and cannot exceed 1000. Query is a case-insensitive match
-// over finding IDs, run IDs, authored content, and closure content.
+// ListFindingsOptions controls deterministic listing. Limit defaults to 100
+// and cannot exceed 1000. Query terms are matched case-insensitively across
+// authored content. Specific prefixed IDs and hexadecimal ID fragments of at
+// least eight characters also match finding, run, and closure IDs. Queried
+// results are ranked before Offset and Limit are applied.
 type ListFindingsOptions struct {
 	State  FindingState
 	Query  string
