@@ -52,8 +52,9 @@ findings by watching output or inferring a lesson from a run.
 - `internal/store` owns the SQLite schema, transactions, projections, and
   consistency checks.
 
-The packages are internal. Only the command-line interface and file format are
-supported interfaces.
+The packages are internal. The CLI is the supported application interface.
+Receipt JSON is versioned as `motus.work-receipt.v1`. The SQLite store is
+managed by Motus and should not be written directly.
 
 ## Store
 
@@ -93,8 +94,13 @@ lowercase SHA-256 digest of the exact compact JSON bytes in the `receipt`
 member. Projection has no current-time field, so unchanged stored data produces
 the same receipt.
 
+Findings and finding closures are not part of a run receipt. Adding or closing
+a finding does not change the receipt bytes for the referenced run.
+
 The hash detects an inconsistent receipt member. It is not a signature and
-does not identify an independent observer.
+does not identify an independent observer. GitHub artifact attestations can
+verify that a release archive was built by this repository's release workflow.
+They do not apply to records in a local ledger.
 
 ## Failure behavior
 

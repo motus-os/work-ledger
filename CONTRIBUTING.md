@@ -22,8 +22,8 @@ artifacts, credentials, transcripts, or private planning material.
 
 Keep a pull request to one coherent change. Explain the user-visible behavior,
 the failure mode addressed, and the commands that actually passed. Do not
-describe producer-controlled receipts as proof, verification, independent
-attestation, or compliance evidence.
+describe producer-controlled receipts as independent proof, external
+verification, attestation, or compliance evidence.
 
 Report suspected vulnerabilities through the private path in
 [SECURITY.md](SECURITY.md), not a public issue.

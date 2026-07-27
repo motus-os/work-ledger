@@ -1,37 +1,42 @@
 # Motus Work Ledger
 
-Logs show what happened. Motus keeps what you choose to save from the work.
+Motus records selected facts from command runs in a local SQLite ledger and
+connects them to findings you choose to keep. A finding can hold an
+explanation, constraint, workaround, decision, or next step. Developers and
+coding agents can search those findings later and inspect the run behind each
+one.
 
-Motus records selected facts about a command run. Add an explanation or next
-step worth keeping. Search the note and inspect its run later.
+Use project documentation for information that should always be present. Use
+Motus when the specific run matters to the finding.
 
-Git shows what changed. Shell history and CI show what ran. Motus stores the
-run and your note under stable IDs in one local SQLite database. A resolution
-can link a successful run. Closed runs have repeatable JSON receipts.
+Motus runs on demand and requires no account, server, or vendor integration.
 
 ## Install
 
-With Go 1.26.5 or newer:
+Download a prebuilt archive for macOS, Linux, or Windows from the
+[latest release](https://github.com/motus-os/work-ledger/releases/latest).
+Each release includes SHA-256 checksums, SBOMs, and GitHub artifact
+attestations. Unpack the archive and place `motus` or `motus.exe` on your
+`PATH`.
+
+If you have Go 1.26.5 or newer, you can install from source instead:
 
 ```console
 $ go install github.com/motus-os/work-ledger/cmd/motus@latest
 ```
 
 Go places the binary in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is unset.
-Make sure that directory is on your `PATH`.
+Confirm the installed command:
 
-Prebuilt archives are available from the
-[latest release](https://github.com/motus-os/work-ledger/releases/latest).
-Each release includes SHA-256 checksums, SBOMs, and GitHub artifact
-attestations. Verify the archive, unpack it, and place `motus` or `motus.exe`
-on your `PATH`.
+```console
+$ motus version
+```
 
 <details>
 <summary>Verify a release archive</summary>
 
-Replace `ARCHIVE_NAME` with the exact downloaded filename.
-Attestation verification uses the
-[GitHub CLI](https://cli.github.com/).
+Replace `ARCHIVE_NAME` with the exact downloaded filename. Attestation
+verification uses the [GitHub CLI](https://cli.github.com/).
 
 On macOS:
 
@@ -67,134 +72,177 @@ $ xattr -d com.apple.quarantine /path/to/motus
 
 </details>
 
-Confirm the installed command:
+Before recording work, add `.motus/` to the project's `.gitignore`. Finding
+text is content you submit, so review it before saving.
 
-```console
-$ motus version
-```
+## Record a run and add a finding
 
-Motus stores this project's ledger at `.motus/ledger.db`. Add `.motus/` to
-`.gitignore` before recording work. Finding text is content you submit, so
-review it before saving.
+This example records a failed test, the explanation, and the successful check
+that resolved it. Replace `npm test` with any test, build, script, or tool you
+already run. Example IDs are shortened and output is abridged.
 
-## Example: record a failure and what worked next
-
-This example uses `npm test`. Replace it with any test, build, script, or tool
-you already run. A run is one command execution recorded by Motus. A finding
-is a short note you attach to a closed run: what happened, the likely cause, or
-what to try next. A failed test shows the full finding lifecycle.
-
-Every run gets a `run_` ID. Every finding gets a `finding_` ID. Those IDs
-connect a finding to its origin run and, when resolved, to a successful run.
-The examples below use shortened IDs.
-
-### 1. Record the failed command
+### Record the command
 
 ```console
 $ motus wrap -- npm test
 motus: recorded run_0370... (failure)
-Keep why this failed:
-  motus --state-dir /work/project/.motus finding add --run run_0370... --file -
-
-Inspect the run:
-  motus --state-dir /work/project/.motus run receipt run_0370...
 ```
 
-Motus shows the command's output normally and returns its exit status. After a
-failure, it prints the exact command for adding a finding.
+Motus shows the command's output normally, returns its exit status, and prints
+the next commands with the new run ID.
 
-### 2. Add a finding
+### Add the finding
 
-Copy the printed command. Finding text is read from a file or standard input,
-not from a command-line argument. Type one short note, then press Ctrl-D on
-macOS or Linux. On Windows, press Ctrl-Z and then Enter.
+Finding text is read from a file or standard input, not from a command-line
+argument. Create `finding.txt` with one summary:
+
+```text
+The generated file was stale. Generate before testing.
+```
 
 ```console
-$ motus finding add --run run_0370... --file -
-The generated file was stale.
+$ motus finding add --run run_0370... --file finding.txt
 Recorded finding_1457... (open)
-Run: run_0370...
-Summary: The generated file was stale.
 ```
 
-The plain-text form records one summary. When another operator or agent may
-need the reasoning later, use JSON to include the likely cause and next step:
+Use JSON when the likely cause and next step should be separate fields:
 
-```console
-$ motus finding add --run run_0370... --format json --file -
+```json
 {
   "summary": "The generated file was stale.",
   "hypothesis": "Generation did not run before the test.",
-  "next_step": "Regenerate the file, then rerun the test."
+  "next_step": "Generate the file, then rerun the test."
 }
-Recorded finding_1457... (open)
-Run: run_0370...
-Summary: The generated file was stale.
 ```
 
-### 3. Record the successful check
+```console
+$ motus finding add --run run_0370... --format json --file finding.json
+Recorded finding_1457... (open)
+```
 
-Fix the problem, then run the same command through Motus. Keep the new run ID
-if it succeeds.
+### Record and link the fix
+
+After the fix, run the check through Motus again:
 
 ```console
 $ motus wrap -- npm test
 motus: recorded run_c588... (success)
 ```
 
-### 4. Link the finding to the successful run
+Create `closure.txt` with a short note:
 
-Use the finding ID from step 2 and the successful run ID from step 3. Enter a
-short closure note and finish input with the same EOF key sequence.
-
-```console
-$ motus finding close finding_1457... --disposition resolved --run run_c588... --file -
-Refreshed the generated file before running the check.
-Closed finding_1457... (resolved)
-Resolving run: run_c588...
+```text
+Generated the file before running the test.
 ```
 
-Motus leaves the original finding unchanged and adds a separate closure.
-
-### 5. Search when the problem returns
+Then link the finding to the successful run:
 
 ```console
-$ motus finding list --query stale
+$ motus finding close finding_1457... --disposition resolved --run run_c588... --file closure.txt
+Closed finding_1457... (resolved)
+```
+
+A resolved finding must link to a closed run whose recorded outcome is
+`success`. Motus does not determine whether that run fixed the finding. Use the
+closure note to explain the relationship. The original finding stays
+unchanged.
+
+### Find it later
+
+```console
+$ motus finding list --query generated
 FINDING ID       STATE     RECORDED (UTC)         ORIGIN RUN   SUMMARY
 finding_1457...  resolved  2026-07-24T18:51:48Z  run_0370...  The generated file was stale.
 
 $ motus finding show finding_1457...
 ```
 
-The full finding shows the authored summary, likely cause, next step, closure
-note, and links to both runs.
+The full view includes the authored finding, closure note, origin run, and
+resolving run.
 
-## Use Motus with an agent
+## Findings beyond failures
 
-A person, coding agent, script, or CI job calls Motus from the workflow it
-already runs. Add this to the project's `AGENTS.md` or equivalent to make the
-expected agent workflow explicit:
+A failed command shows the complete lifecycle, but a finding can be attached
+to any closed run that gives it useful context. Use a finding to preserve a
+run-specific constraint, workaround, decision, or next step.
+
+The current fields are deliberately small:
+
+- `summary` states the finding
+- `hypothesis` records a likely cause or explanation when useful
+- `next_step` records the action to try later
+
+Leave enduring findings open while they remain useful. Resolve a finding when
+a recorded successful run addresses it. Dismiss it when it is incorrect,
+stale, or no longer useful, and state why in the closure note.
+
+## Use Motus with coding agents and CI
+
+Call Motus from the workflow that already runs the command. People, coding
+agents, scripts, and CI use the same CLI.
+
+Add guidance like this to the project's `AGENTS.md` or equivalent:
 
 ```markdown
 ## Motus
 
-- Search open and resolved Motus findings before work where an earlier finding
-  may help.
+- Search Motus findings before work where an earlier finding may help.
 - Run meaningful tests, builds, scripts, and release checks through
   `motus wrap`.
-- Record a finding only when the work produced guidance worth reusing.
+- Add a finding when a run produced an explanation, constraint, workaround,
+  decision, or next step worth reusing.
 - Resolve a finding only with a successful recorded run that addresses it.
 ```
 
-Scripts and CI jobs can call the same commands directly. Callers see the same
-records only when they use the same state directory. Preserve that private
-directory when a later CI job needs the records. Motus requires no separate
-service or vendor integration.
+The caller decides what deserves a durable record. For unattended CI, pass an
+explicit state directory and persist or restore it when later jobs need the
+same runs and findings.
 
-The agent or operator chooses what deserves a durable record. Motus does not
-inspect a conversation or infer a lesson.
+## State directories and worktrees
 
-## Data Motus keeps
+By default, Motus uses `.motus/ledger.db` at the current Git root. Outside a
+Git repository, it uses `.motus/ledger.db` under the current directory.
+Override the state directory with `--state-dir PATH` or `MOTUS_STATE_DIR`.
+
+Each clone and Git worktree has its own default Git root and therefore its own
+default ledger. Use the same explicit state directory only when separate
+workspaces should share records.
+
+If a list is unexpectedly empty, check the current Git root and the selected
+state directory. Run `motus doctor` against that same directory before relying
+on its records.
+
+Motus creates state directories with private POSIX permissions. SQLite may
+create `ledger.db-wal` and `ledger.db-shm` beside `ledger.db`. Back up, move,
+or remove the entire state directory as one unit while no Motus process is
+using it.
+
+## Search
+
+`motus finding list --query TEXT` performs a case-insensitive substring match
+over finding and closure IDs, origin and resolving run IDs, the summary,
+hypothesis, next step, and closure note. Results are deterministic and newest
+first. Add
+`--state open`, `--state resolved`, or `--state dismissed` to narrow the list.
+Use `--limit`, `--offset`, and `--json` for scripts and coding agents.
+
+Search reads only the selected state directory. It does not search other
+clones, worktrees, or CI artifacts unless they use or restore that same state.
+
+## Run receipts
+
+`motus run receipt RUN_ID` writes a deterministic, self-hashed JSON projection
+of one closed run using the schema `motus.work-receipt.v1`. Findings and
+finding closures are not part of a run receipt. Adding or closing a finding
+does not change the receipt bytes for the referenced run.
+
+GitHub artifact attestations let you verify that a release archive was built
+by this repository's release workflow. They do not apply to ledger receipts,
+which are producer-controlled local records.
+
+## Stored data and privacy
+
+Run records contain:
 
 - a random run ID and timestamps
 - the executable's base name and argument count
@@ -202,22 +250,14 @@ inspect a conversation or infer a lesson.
 - stdout and stderr byte and newline counts
 - exit code or terminating signal when available, and outcome
 - structured run events created by Motus
-- finding summaries, likely causes, next steps, and closure notes that you
-  explicitly supply
 
 Motus does not store command argument values, wrapped-command stdin, raw stdout
 or stderr, environment variables, source files, prompts, or agent transcripts.
-Finding text is the exception: Motus stores the validated finding content you
-submit through a file or stdin. It does not send ledger data over the network.
+Findings and closure notes are different: Motus stores the exact validated text
+you submit through a file or standard input. Motus has no ledger network
+client.
 
-## State and commands
-
-By default, Motus uses `.motus/ledger.db` at the current Git root. Outside a
-Git repository, it uses the current directory. Override this with
-`--state-dir PATH` or `MOTUS_STATE_DIR`.
-
-Motus creates state directories with private POSIX permissions. If you create
-a custom state directory yourself, restrict it to the current user before use.
+## Command reference
 
 ```text
 motus wrap -- COMMAND [ARG ...]  Run a command and record selected facts
@@ -242,18 +282,18 @@ output destination closes, Motus stops the command tree and records a failure.
 The wrapped process keeps the same environment and operating-system
 capabilities it would have when run directly; Motus is not a sandbox.
 
-## Trust boundary
+## Trust model
 
 A receipt reports what the local ledger says about a run. Finding text comes
 from whoever submits it; Motus does not infer or verify it. SQLite rules block
-normal changes, and `motus doctor` checks for inconsistencies, but anyone who
-controls the database file can rewrite it.
+normal changes, and `motus doctor` checks current consistency, but anyone who
+controls the database file can replace those controls and rewrite the records.
 
-Motus does not sign records or observe the command independently. Receipts
+Motus does not sign ledger records or observe commands independently. Receipts
 identify this boundary as `"trust_model":"producer-controlled"`; they do not
-prove that the work was correct. See [SECURITY.md](SECURITY.md) for the full
-security model and [ARCHITECTURE.md](ARCHITECTURE.md) for the data flow and
-storage design.
+establish that every relevant fact was recorded or that the work was correct.
+See [SECURITY.md](SECURITY.md) for the complete security model and
+[ARCHITECTURE.md](ARCHITECTURE.md) for the data flow and storage design.
 
 ## Development
 
