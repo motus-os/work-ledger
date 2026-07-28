@@ -9,23 +9,7 @@ Motus owns a small, fixed record contract. The workflow that invokes Motus
 decides what to record, when to search, and whether selected output should move
 to another system.
 
-```text
-human, agent, script, or CI
-              |
-              | invokes the CLI
-              v
-       Motus record contract
-              |
-              v
-       local SQLite ledger
-              |
-              | deterministic search and JSON output
-              v
-      later human or agent work
-
-external source --> caller records relevant work and adds finding --> Motus
-Motus JSON ------> caller-owned mapping and routing ----------------> external destination
-```
+![An external system remains authoritative while caller-owned mapping adds selected context to relevant technical work in Motus. In the other direction, caller-owned mapping and routing can send Motus JSON to an issue, review, or project system. Motus does not synchronize external systems.](docs/integration-boundaries.svg)
 
 External systems remain authoritative for their own records. Motus does not
 manage adapters, routing rules, organizational taxonomies, or producer
@@ -36,17 +20,7 @@ run or appends a bounded closure note.
 
 ## Command flow
 
-```text
-                         +--> child process --> stdout/stderr --> terminal or CI
-command + arguments --> motus wrap
-                         +--> metadata + output counts --> .motus/ledger.db
-                                                                  |
-                                                                  v
-                                                       motus run receipt
-                                                                  |
-                                                                  v
-                                                                 JSON
-```
+![A person, agent, script, or CI invokes the Motus CLI. Motus starts an existing command and forwards its output normally while selected run facts and explicitly supplied findings go to a local SQLite ledger. List, show, receipt, doctor, and JSON commands read the ledger.](docs/runtime-boundary.svg)
 
 Motus reads Git metadata, creates an open run, and starts the command directly
 without a shell. Command arguments and stdin reach the child process but are
@@ -57,15 +31,7 @@ stderr are pipes, so formatting can differ from a direct invocation.
 
 Findings use a separate, explicit path:
 
-```text
-closed run
-    |
-    +-- finding add reads one bounded text or JSON file (or stdin)
-    +-- finding list searches authored fields deterministically
-    +-- finding close appends a resolved or dismissed closure
-            |
-            +-- resolved closures link to a closed successful run
-```
+![A finding links authored context to an origin run. It stays open until a caller appends either a resolved closure linked to a successful run or a dismissed closure with a note. The original finding remains unchanged.](docs/finding-lifecycle.svg)
 
 Finding and closure payloads never enter through a command-line value. This
 keeps those payloads out of ordinary process listings and shell history. File
@@ -111,7 +77,7 @@ Closing appends the final
 Database triggers reject event mutation, deletion, sequence gaps, writes after
 the terminal event, run deletion, start-metadata mutation, and changes to a
 closed run. Findings can reference only closed runs. A finding remains open
-until one immutable closure resolves it with a closed successful run or
+until one append-only closure resolves it with a closed successful run or
 dismisses it with a note.
 
 ## Receipts

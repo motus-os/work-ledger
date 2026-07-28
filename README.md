@@ -1,34 +1,21 @@
 # Motus Work Ledger
 
-Motus keeps selected facts from a command run together with a finding you
-choose to save. A finding can hold an explanation, constraint, workaround,
-decision, or next step. Before similar work, a developer or coding agent can
-search the local ledger, inspect the finding and its source run, and use that
-context instead of repeating the investigation.
+Motus gives developers and coding agents a local, searchable record of command
+runs and the context tied to them.
 
-Use project documentation for information that should always be present. Use
-Motus when the specific run matters to the finding.
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/motus-workflow-mobile.svg">
+  <img src="docs/motus-workflow.svg" alt="During current work, Motus records selected run facts and links them to context added by a developer or agent. During later work, a search returns the finding and recorded run ID.">
+</picture>
 
-Motus runs on demand and requires no account, server, or vendor integration.
+A **run** records selected machine facts such as the repository, commit, and
+outcome. A **finding** holds the explanation, constraint, workaround, decision,
+or next step worth keeping. A person, agent, or script chooses what to add.
+Before similar work, a later developer or agent can search the ledger and
+inspect the finding and recorded run.
 
-```text
-work runs through Motus
-          |
-          v
-selected run facts are recorded
-          |
-          v
-a person, agent, or script adds a finding
-          |
-          v
-a later workflow searches the same ledger
-          |
-          v
-the finding and source run inform the next action
-          |
-          v
-the caller can close it with a successful recorded run
-```
+People, agents, scripts, and CI use the same CLI. Motus runs on demand and
+requires no account, server, or vendor integration.
 
 ## Install
 
@@ -177,13 +164,18 @@ $ motus finding show finding_1457...
 ```
 
 The full view includes the authored finding, closure note, origin run, and
-resolving run.
+resolving run. Use either run ID with `motus run receipt RUN_ID` to inspect
+recorded machine facts. For automation,
+`motus finding show FINDING_ID --json` returns the finding and its linked run
+records.
 
 ## Findings beyond failures
 
 A failed command shows the complete lifecycle, but a finding can be attached
 to any closed run that gives it useful context. Use a finding to preserve a
 run-specific constraint, workaround, decision, or next step.
+
+![A finding links authored context to an origin run. A caller can append either a resolved closure linked to a successful run or a dismissed closure with a note. The original finding remains unchanged.](docs/finding-lifecycle.svg)
 
 The current fields are deliberately small:
 
@@ -228,8 +220,22 @@ Add guidance like this to the project's `AGENTS.md` or equivalent:
 ```
 
 The caller decides what deserves a durable record. For unattended CI, pass an
-explicit state directory and persist or restore it when later jobs need the
-same runs and findings.
+explicit state directory and preserve the whole directory when later jobs need
+the same runs and findings. Archive it before artifact upload so hidden files
+and private file modes survive the handoff:
+
+```console
+$ tar -cf motus-state.tar .motus
+# Upload motus-state.tar as the artifact.
+
+# In a later job, after downloading the artifact:
+$ tar -xf motus-state.tar
+$ motus --state-dir .motus doctor
+```
+
+Replace `.motus` in the commands with the explicit state-directory path when
+needed. Review finding text before upload. The artifact inherits the CI host's
+access and retention policy.
 
 ### Connect external decisions to technical work
 
