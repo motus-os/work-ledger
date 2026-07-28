@@ -3,6 +3,37 @@
 Motus Work Ledger is one command-line program backed by one project-local
 SQLite database. It runs on demand without a server or background service.
 
+## Workflow boundary
+
+Motus owns a small, fixed record contract. The workflow that invokes Motus
+decides what to record, when to search, and whether selected output should move
+to another system.
+
+```text
+human, agent, script, or CI
+              |
+              | invokes the CLI
+              v
+       Motus record contract
+              |
+              v
+       local SQLite ledger
+              |
+              | deterministic search and JSON output
+              v
+      later human or agent work
+
+external source --> caller records relevant work and adds finding --> Motus
+Motus JSON ------> caller-owned mapping and routing ----------------> external destination
+```
+
+External systems remain authoritative for their own records. Motus does not
+manage adapters, routing rules, organizational taxonomies, or producer
+identity. A run projection moves once from open to closed. Events, findings,
+and closures are append-enforced under normal application writes. External
+authored content enters only when the caller adds a bounded finding to a closed
+run or appends a bounded closure note.
+
 ## Command flow
 
 ```text
