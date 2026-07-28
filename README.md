@@ -1,15 +1,34 @@
 # Motus Work Ledger
 
-Motus records selected facts from command runs in a local SQLite ledger and
-connects them to findings you choose to keep. A finding can hold an
-explanation, constraint, workaround, decision, or next step. Developers and
-coding agents can search those findings later and inspect the run behind each
-one.
+Motus keeps selected facts from a command run together with a finding you
+choose to save. A finding can hold an explanation, constraint, workaround,
+decision, or next step. Before similar work, a developer or coding agent can
+search the local ledger, inspect the finding and its source run, and use that
+context instead of repeating the investigation.
 
 Use project documentation for information that should always be present. Use
 Motus when the specific run matters to the finding.
 
 Motus runs on demand and requires no account, server, or vendor integration.
+
+```text
+work runs through Motus
+          |
+          v
+selected run facts are recorded
+          |
+          v
+a person, agent, or script adds a finding
+          |
+          v
+a later workflow searches the same ledger
+          |
+          v
+the finding and source run inform the next action
+          |
+          v
+the caller can close it with a successful recorded run
+```
 
 ## Install
 
@@ -176,6 +195,20 @@ Leave enduring findings open while they remain useful. Resolve a finding when
 a recorded successful run addresses it. Dismiss it when it is incorrect,
 stale, or no longer useful, and state why in the closure note.
 
+## Choose where information belongs
+
+Use the smallest durable home that fits the information:
+
+| Information | Keep it in |
+| --- | --- |
+| A standing rule every contributor should see | Project documentation or `AGENTS.md` |
+| An explanation, constraint, workaround, decision, or next step whose source run matters | A Motus finding |
+| A ticket or external decision whose owning system already provides the needed context | The system that owns it |
+| An external decision that changes specific technical work | Its owning system, plus a concise Motus finding when the implementation or validation run matters |
+
+Motus is not a replacement for project documentation or an external system of
+record. It preserves selected run-linked context for later work.
+
 ## Use Motus with coding agents and CI
 
 Call Motus from the workflow that already runs the command. People, coding
@@ -197,6 +230,18 @@ Add guidance like this to the project's `AGENTS.md` or equivalent:
 The caller decides what deserves a durable record. For unattended CI, pass an
 explicit state directory and persist or restore it when later jobs need the
 same runs and findings.
+
+### Connect external decisions to technical work
+
+Keep an external decision in the ticket or document that owns it. If it changes
+technical work and the run matters, add a concise finding to the relevant
+closed implementation or validation run. Include an external reference only
+when it will help the next person or agent find the authoritative record.
+
+For downstream automation, `motus finding show FINDING_ID --json` returns the
+finding and its source run. A caller-owned script can use that output to create
+or update an issue, review, or project record. Motus does not route records or
+keep an external system synchronized.
 
 ## State directories and worktrees
 
@@ -254,9 +299,9 @@ Run records contain:
 
 Motus does not store command argument values, wrapped-command stdin, raw stdout
 or stderr, environment variables, source files, prompts, or agent transcripts.
-Findings and closure notes are different: Motus stores the exact validated text
-you submit through a file or standard input. Motus has no ledger network
-client.
+Findings and closure notes are different: Motus removes one trailing line
+ending, validates the submitted text, and stores the result. Motus has no
+ledger network client.
 
 ## Command reference
 
