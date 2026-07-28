@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -17,6 +18,7 @@ import (
 const (
 	maxFindingSummaryBytes = 512
 	maxFindingTextBytes    = 4 << 10
+	maxFindingQueryTerms   = 64
 )
 
 var bidiControl = unicode.Properties["Bidi_Control"]
@@ -146,8 +148,9 @@ func (s *Store) GetFinding(ctx context.Context, findingID string) (Finding, erro
 	return getFinding(ctx, s.db, findingID)
 }
 
-// ListFindings returns deterministic newest-first results after applying the
-// optional state and query filters.
+// ListFindings returns deterministic results after applying the optional
+// state and query filters. Unqueried results are newest-first. Queried results
+// are ordered by lexical relevance, then recency.
 func (s *Store) ListFindings(ctx context.Context, options ListFindingsOptions) ([]Finding, error) {
 	if err := ValidateListFindingsOptions(options); err != nil {
 		return nil, err
@@ -163,8 +166,12 @@ func (s *Store) ListFindings(ctx context.Context, options ListFindingsOptions) (
 		return nil, fmt.Errorf("list findings: %w", err)
 	}
 	defer rows.Close()
-	query := strings.ToLower(options.Query)
+	query, err := newFindingQuery(options.Query)
+	if err != nil {
+		return nil, err
+	}
 	findings := make([]Finding, 0)
+	matches := make([]findingMatch, 0)
 	skipped := 0
 	for rows.Next() {
 		finding, err := scanFinding(rows)
@@ -174,20 +181,49 @@ func (s *Store) ListFindings(ctx context.Context, options ListFindingsOptions) (
 		if options.State != "" && finding.State != options.State {
 			continue
 		}
-		if query != "" && !findingContains(finding, query) {
+		if query.empty() {
+			if skipped < options.Offset {
+				skipped++
+				continue
+			}
+			if len(findings) == options.Limit {
+				break
+			}
+			findings = append(findings, finding)
 			continue
 		}
-		if skipped < options.Offset {
-			skipped++
+		match := query.match(finding)
+		if !match.matched() {
 			continue
 		}
-		if len(findings) == options.Limit {
-			break
-		}
-		findings = append(findings, finding)
+		matches = append(matches, findingMatch{finding: finding, score: match})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list findings: %w", err)
+	}
+	if query.empty() {
+		return findings, nil
+	}
+	sort.Slice(matches, func(left, right int) bool {
+		a, b := matches[left], matches[right]
+		if a.score.exact != b.score.exact {
+			return a.score.exact
+		}
+		if a.score.matchedTerms != b.score.matchedTerms {
+			return a.score.matchedTerms > b.score.matchedTerms
+		}
+		if !a.finding.RecordedAt.Equal(b.finding.RecordedAt) {
+			return a.finding.RecordedAt.After(b.finding.RecordedAt)
+		}
+		return a.finding.ID < b.finding.ID
+	})
+	if options.Offset >= len(matches) {
+		return findings, nil
+	}
+	end := min(options.Offset+options.Limit, len(matches))
+	findings = make([]Finding, 0, end-options.Offset)
+	for _, match := range matches[options.Offset:end] {
+		findings = append(findings, match.finding)
 	}
 	return findings, nil
 }
@@ -205,6 +241,9 @@ func ValidateListFindingsOptions(options ListFindingsOptions) error {
 		return fmt.Errorf("%w: invalid finding state %q", ErrInvalid, options.State)
 	}
 	if err := validateQuery(options.Query); err != nil {
+		return err
+	}
+	if _, err := newFindingQuery(options.Query); err != nil {
 		return err
 	}
 	return nil
@@ -445,25 +484,137 @@ func validateQuery(query string) error {
 	return nil
 }
 
-func findingContains(finding Finding, lowerQuery string) bool {
+type findingQuery struct {
+	full  string
+	terms []string
+}
+
+type findingMatch struct {
+	finding Finding
+	score   findingMatchScore
+}
+
+type findingMatchScore struct {
+	exact        bool
+	matchedTerms int
+}
+
+func newFindingQuery(query string) (findingQuery, error) {
+	lower := strings.ToLower(query)
+	rawTerms := strings.FieldsFunc(lower, func(character rune) bool {
+		return character != '_' && !unicode.IsLetter(character) && !unicode.IsNumber(character)
+	})
+	terms := make([]string, 0, len(rawTerms))
+	seen := make(map[string]struct{}, len(rawTerms))
+	for _, term := range rawTerms {
+		if _, exists := seen[term]; exists {
+			continue
+		}
+		seen[term] = struct{}{}
+		terms = append(terms, term)
+		if len(terms) > maxFindingQueryTerms {
+			return findingQuery{}, fmt.Errorf("%w: query exceeds %d unique terms", ErrInvalid, maxFindingQueryTerms)
+		}
+	}
+	return findingQuery{full: lower, terms: terms}, nil
+}
+
+func (q findingQuery) empty() bool {
+	return q.full == ""
+}
+
+func (q findingQuery) match(finding Finding) findingMatchScore {
+	authored := lowerValues(findingAuthoredValues(finding))
+	identifiers := lowerValues(findingIdentifierValues(finding))
+	exact := containsNormalized(authored, q.full)
+	if identifierQueryAllowed(q.full) {
+		exact = exact || containsNormalized(identifiers, q.full)
+	}
+	matchedTerms := 0
+	for _, term := range q.terms {
+		matched := containsNormalized(authored, term)
+		if isFindingIdentifierTerm(term) {
+			matched = matched || containsNormalized(identifiers, term)
+		}
+		if matched {
+			matchedTerms++
+		}
+	}
+	return findingMatchScore{exact: exact, matchedTerms: matchedTerms}
+}
+
+func (score findingMatchScore) matched() bool {
+	return score.exact || score.matchedTerms > 0
+}
+
+func findingAuthoredValues(finding Finding) []string {
 	values := []string{
-		finding.ID,
-		finding.OriginRunID,
 		finding.Content.Summary,
 		finding.Content.Hypothesis,
 		finding.Content.NextStep,
 	}
 	if finding.Closure != nil {
+		values = append(values, finding.Closure.Content.Note)
+	}
+	return values
+}
+
+func findingIdentifierValues(finding Finding) []string {
+	values := []string{
+		finding.ID,
+		finding.OriginRunID,
+	}
+	if finding.Closure != nil {
 		values = append(values,
 			finding.Closure.ID,
 			finding.Closure.ResolvingRunID,
-			finding.Closure.Content.Note,
 		)
 	}
+	return values
+}
+
+func lowerValues(values []string) []string {
+	lowered := make([]string, len(values))
+	for index, value := range values {
+		lowered[index] = strings.ToLower(value)
+	}
+	return lowered
+}
+
+func containsNormalized(values []string, lowerQuery string) bool {
 	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), lowerQuery) {
+		if strings.Contains(value, lowerQuery) {
 			return true
 		}
 	}
 	return false
+}
+
+func isFindingIdentifierTerm(term string) bool {
+	return hasSpecificIdentifierPrefix(term) || isHexIdentifierFragment(term)
+}
+
+func identifierQueryAllowed(query string) bool {
+	return hasSpecificIdentifierPrefix(query) || isHexIdentifierFragment(query)
+}
+
+func hasSpecificIdentifierPrefix(term string) bool {
+	for _, prefix := range []string{"finding_", "closure_", "run_"} {
+		if strings.HasPrefix(term, prefix) && len(term)-len(prefix) >= 8 {
+			return true
+		}
+	}
+	return false
+}
+
+func isHexIdentifierFragment(term string) bool {
+	if len(term) < 8 {
+		return false
+	}
+	for _, character := range term {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }

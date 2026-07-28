@@ -91,6 +91,52 @@ func TestFindingCLIEndToEnd(t *testing.T) {
 		t.Fatalf("finding = %#v", findings[0])
 	}
 
+	ledger, err = store.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AddFinding(context.Background(), store.AddFindingParams{
+		ID:          "finding_newer_reordered_terms",
+		OriginRunID: originRunID,
+		Content: store.FindingContent{
+			Summary:  "Used cache after retry",
+			NextStep: "Inspect the cache before another attempt.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{
+		"finding", "list", "--query", "retry used", "--json",
+	}); code != 0 {
+		t.Fatalf("ranked JSON list exit = %d, stderr=%q", code, stderr.String())
+	}
+	findings = nil
+	if err := json.Unmarshal(stdout.Bytes(), &findings); err != nil || len(findings) != 2 {
+		t.Fatalf("ranked JSON list = %#v, %v; output=%q", findings, err, stdout.String())
+	}
+	if findings[0].ID != findingID || findings[1].ID != "finding_newer_reordered_terms" {
+		t.Fatalf("ranked JSON IDs = %q, %q", findings[0].ID, findings[1].ID)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{
+		"finding", "list", "--query", "retry used",
+	}); code != 0 {
+		t.Fatalf("ranked human list exit = %d, stderr=%q", code, stderr.String())
+	}
+	firstPosition := strings.Index(stdout.String(), findingID)
+	secondPosition := strings.Index(stdout.String(), "finding_newer_reordered_terms")
+	if firstPosition < 0 || secondPosition < 0 || firstPosition >= secondPosition {
+		t.Fatalf("ranked human list order = %q", stdout.String())
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{
