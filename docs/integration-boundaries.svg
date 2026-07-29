@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="990" viewBox="0 0 720 990" role="img" aria-labelledby="title desc">
+  <title id="title">Integration boundaries</title>
+  <desc id="desc">External records remain authoritative. A caller-owned workflow may select concise context and add it to a relevant Motus run. In the other direction, a caller-owned workflow may map Motus JSON into an issue, review, or project system. Motus does not synchronize systems.</desc>
+  <rect width="720" height="990" fill="#f7f8fa"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#101217">
+    <text x="48" y="62" font-size="30" font-weight="700">Integration boundaries</text>
+    <text x="48" y="98" fill="#606978" font-size="19">Fixed Motus records. Workflow rules stay outside the ledger.</text>
+    <line x1="48" y1="126" x2="672" y2="126" stroke="#dce1e8" stroke-width="2"/>
+
+    <text x="48" y="174" fill="#606978" font-size="16" font-weight="700" letter-spacing="1.5">CONTEXT ENTERS</text>
+
+    <rect x="48" y="204" width="188" height="148" rx="10" fill="#ffffff" stroke="#bec6d2" stroke-width="2"/>
+    <g transform="translate(70 226)" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+      <path d="M1 0h14l4 4v24H1z"/>
+      <path d="M15 0v4h4M6 11h8M6 16h7M6 21h5"/>
+    </g>
+    <text x="70" y="286" font-size="19" font-weight="700">External source</text>
+    <text x="70" y="318" fill="#606978" font-size="16">ticket · review · PMO</text>
+    <text x="70" y="340" fill="#606978" font-size="16">remains authoritative</text>
+
+    <path d="M248 278h42m-9-8 9 8-9 8" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+
+    <rect x="302" y="222" width="148" height="112" rx="10" fill="#edf2ff" stroke="#b9c8f5" stroke-width="2"/>
+    <text x="376" y="264" text-anchor="middle" font-size="18" font-weight="700">Your workflow</text>
+    <text x="376" y="296" text-anchor="middle" fill="#303642" font-size="16">selects context</text>
+
+    <path d="M462 278h42m-9-8 9 8-9 8" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+
+    <rect x="516" y="204" width="156" height="148" rx="10" fill="#ffffff" stroke="#b9c8f5" stroke-width="2"/>
+    <g transform="translate(538 226)">
+      <rect width="30" height="30" rx="7" fill="#2456e6"/>
+      <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="2">
+        <path d="M7 9h4M15 9h9M7 15h4M15 15h9M7 21h4M15 21h9"/>
+      </g>
+    </g>
+    <text x="538" y="286" font-size="19" font-weight="700">Motus</text>
+    <text x="538" y="318" fill="#606978" font-size="16">relevant run</text>
+    <text x="538" y="340" fill="#606978" font-size="16">+ finding</text>
+
+    <text x="48" y="394" fill="#303642" font-size="17">No relevant run? Keep the record in its source system.</text>
+
+    <line x1="48" y1="438" x2="672" y2="438" stroke="#dce1e8" stroke-width="2"/>
+    <text x="48" y="488" fill="#606978" font-size="16" font-weight="700" letter-spacing="1.5">RECORDS LEAVE</text>
+
+    <rect x="48" y="518" width="188" height="148" rx="10" fill="#ffffff" stroke="#b9c8f5" stroke-width="2"/>
+    <g transform="translate(70 540)">
+      <rect width="30" height="30" rx="7" fill="#2456e6"/>
+      <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="2">
+        <path d="M7 9h4M15 9h9M7 15h4M15 15h9M7 21h4M15 21h9"/>
+      </g>
+    </g>
+    <text x="70" y="600" font-size="19" font-weight="700">Motus JSON</text>
+    <text x="70" y="632" fill="#606978" font-size="16">finding</text>
+    <text x="70" y="654" fill="#606978" font-size="16">+ source run</text>
+
+    <path d="M248 592h42m-9-8 9 8-9 8" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+
+    <rect x="302" y="536" width="148" height="112" rx="10" fill="#edf2ff" stroke="#b9c8f5" stroke-width="2"/>
+    <text x="376" y="578" text-anchor="middle" font-size="18" font-weight="700">Your workflow</text>
+    <text x="376" y="610" text-anchor="middle" fill="#303642" font-size="16">maps and routes</text>
+
+    <path d="M462 592h42m-9-8 9 8-9 8" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+
+    <rect x="516" y="518" width="156" height="148" rx="10" fill="#ffffff" stroke="#bec6d2" stroke-width="2"/>
+    <g transform="translate(538 540)" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+      <rect x="1" y="3" width="24" height="22" rx="3"/>
+      <path d="M6 9h14M6 14h10M6 19h7"/>
+    </g>
+    <text x="538" y="600" font-size="19" font-weight="700">Destination</text>
+    <text x="538" y="632" fill="#606978" font-size="16">issue · review</text>
+    <text x="538" y="654" fill="#606978" font-size="16">project system</text>
+
+    <rect x="48" y="730" width="624" height="156" rx="10" fill="#ffffff" stroke="#b9c8f5" stroke-width="2"/>
+    <line x1="48" y1="752" x2="48" y2="864" stroke="#2456e6" stroke-width="4"/>
+    <text x="78" y="780" font-size="21" font-weight="700">The boundary</text>
+    <text x="78" y="824" fill="#303642" font-size="18">Motus stores and returns records.</text>
+    <text x="78" y="856" fill="#303642" font-size="18">Your workflow decides what moves and where.</text>
+
+    <line x1="48" y1="930" x2="672" y2="930" stroke="#dce1e8" stroke-width="2"/>
+    <text x="360" y="966" text-anchor="middle" fill="#173ca8" font-size="18" font-weight="700">Motus does not synchronize external systems.</text>
+  </g>
+</svg>

@@ -56,6 +56,11 @@ archives:
           owner: root
           group: root
           mtime: "{{ .CommitDate }}"
+      - src: docs/*.svg
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
       - src: SECURITY.md
         info:
           owner: root
