@@ -83,7 +83,7 @@ func TestStoreHelperProcess(t *testing.T) {
 	}
 	ledger, err := Open(context.Background(), stateDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		writeStoreHelperError(err)
 		os.Exit(97)
 	}
 	if mode == "unmarked-delete-hot-crash" {
