@@ -116,7 +116,7 @@ func open(ctx context.Context, stateDir string, readOnly, existingOnly bool) (*S
 			return nil, fmt.Errorf("%w: database %q needs writable validation and rollback recovery",
 				errRollbackRecoveryRequired, database)
 		}
-		if !readOnly && (!header.valid || header.applicationID != motusApplicationID) {
+		if !readOnly {
 			if err := validateRollbackSnapshot(ctx, dir, database); err != nil {
 				return nil, err
 			}

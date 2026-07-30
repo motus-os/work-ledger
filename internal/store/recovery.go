@@ -16,6 +16,9 @@ import (
 
 var errLedgerChangedDuringValidation = errors.New("store: ledger changed during validation")
 
+// A first initializer or active writer can change the journal while another
+// process is taking an isolated validation copy. Allow a bounded window for a
+// stable snapshot or clean journal without ever opening an unvalidated source.
 const rollbackValidationRetries = 20
 
 type validationFile struct {
@@ -193,13 +196,6 @@ func validateWALSnapshot(ctx context.Context, stateDir, database string) error {
 func validateRollbackSnapshot(ctx context.Context, stateDir, database string) error {
 	var err error
 	for attempt := 0; attempt <= rollbackValidationRetries; attempt++ {
-		header, headerErr := inspectSQLiteHeader(database)
-		if headerErr != nil {
-			return headerErr
-		}
-		if header.valid && header.applicationID == motusApplicationID {
-			return nil
-		}
 		info, exists, inspectErr := inspectRegularStateFile(database+"-journal", "rollback journal")
 		if inspectErr != nil {
 			return inspectErr

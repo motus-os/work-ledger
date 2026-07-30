@@ -45,9 +45,16 @@ func TestStoreHelperProcess(t *testing.T) {
 	}
 	if mode == "unknown-delete-hot-crash" {
 		marker := os.Args[separator+4]
-		if err := holdUnknownDeleteStoreWithHotJournal(stateDir, marker); err != nil {
+		if err := holdInvalidDeleteStoreWithHotJournal(stateDir, marker, 0); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(84)
+		}
+	}
+	if mode == "identified-invalid-delete-hot-crash" {
+		marker := os.Args[separator+4]
+		if err := holdInvalidDeleteStoreWithHotJournal(stateDir, marker, motusApplicationID); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(81)
 		}
 	}
 	if mode == "wal-crash" {
@@ -223,7 +230,7 @@ func holdInvalidWALStore(stateDir, marker string) error {
 	}
 }
 
-func holdUnknownDeleteStoreWithHotJournal(stateDir, marker string) error {
+func holdInvalidDeleteStoreWithHotJournal(stateDir, marker string, applicationID uint32) error {
 	database, err := createPrivateRawDatabase(stateDir)
 	if err != nil {
 		return err
@@ -243,6 +250,11 @@ func holdUnknownDeleteStoreWithHotJournal(stateDir, marker string) error {
 	}
 	if _, err := db.Exec(`PRAGMA user_version = 777`); err != nil {
 		return err
+	}
+	if applicationID != 0 {
+		if _, err := db.Exec(`PRAGMA application_id = ` + strconv.FormatUint(uint64(applicationID), 10)); err != nil {
+			return err
+		}
 	}
 	if _, err := db.Exec(`PRAGMA cache_size = 1`); err != nil {
 		return err
@@ -748,39 +760,56 @@ func TestInvalidUncheckpointedWALIsRejectedWithoutSourceMutation(t *testing.T) {
 	}
 }
 
-func TestUnknownHotRollbackJournalIsRejectedWithoutSourceMutation(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, "state")
-	database := filepath.Join(stateDir, DatabaseFilename)
-	journal := database + "-journal"
-	crashStoreHelper(t, "unknown-delete-hot-crash", stateDir, filepath.Join(root, "ready"))
-	if info, err := os.Stat(journal); err != nil || info.Size() == 0 {
-		t.Fatalf("unknown hot rollback journal = %#v, %v", info, err)
-	}
-	header, err := inspectSQLiteHeader(database)
-	if err != nil || !header.valid || header.applicationID != 0 {
-		t.Fatalf("unknown hot database header = %#v, %v", header, err)
-	}
-	before := captureStateDirectory(t, stateDir)
-
-	openers := []struct {
-		name string
-		open func(context.Context, string) (*Store, error)
+func TestInvalidHotRollbackJournalIsRejectedWithoutSourceMutation(t *testing.T) {
+	cases := []struct {
+		name          string
+		helperMode    string
+		applicationID uint32
 	}{
-		{name: "OpenForRead", open: OpenForRead},
-		{name: "Open", open: Open},
+		{name: "unknown", helperMode: "unknown-delete-hot-crash"},
+		{
+			name:          "Motus-identified",
+			helperMode:    "identified-invalid-delete-hot-crash",
+			applicationID: motusApplicationID,
+		},
 	}
-	for _, opener := range openers {
-		t.Run(opener.name, func(t *testing.T) {
-			ledger, err := opener.open(context.Background(), stateDir)
-			if ledger != nil {
-				_ = ledger.Close()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			stateDir := filepath.Join(root, "state")
+			database := filepath.Join(stateDir, DatabaseFilename)
+			journal := database + "-journal"
+			crashStoreHelper(t, testCase.helperMode, stateDir, filepath.Join(root, "ready"))
+			if info, err := os.Stat(journal); err != nil || info.Size() == 0 {
+				t.Fatalf("invalid hot rollback journal = %#v, %v", info, err)
 			}
-			if !errors.Is(err, ErrInvalidSchema) {
-				t.Fatalf("%s(unknown hot rollback journal) error = %v, want ErrInvalidSchema",
-					opener.name, err)
+			header, err := inspectSQLiteHeader(database)
+			if err != nil || !header.valid || header.applicationID != testCase.applicationID {
+				t.Fatalf("invalid hot database header = %#v, %v; want application_id=%d",
+					header, err, testCase.applicationID)
 			}
-			assertStateDirectoryUnchanged(t, stateDir, before)
+			before := captureStateDirectory(t, stateDir)
+
+			openers := []struct {
+				name string
+				open func(context.Context, string) (*Store, error)
+			}{
+				{name: "OpenForRead", open: OpenForRead},
+				{name: "Open", open: Open},
+			}
+			for _, opener := range openers {
+				t.Run(opener.name, func(t *testing.T) {
+					ledger, err := opener.open(context.Background(), stateDir)
+					if ledger != nil {
+						_ = ledger.Close()
+					}
+					if !errors.Is(err, ErrInvalidSchema) {
+						t.Fatalf("%s(invalid hot rollback journal) error = %v, want ErrInvalidSchema",
+							opener.name, err)
+					}
+					assertStateDirectoryUnchanged(t, stateDir, before)
+				})
+			}
 		})
 	}
 }
