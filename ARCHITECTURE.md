@@ -61,24 +61,31 @@ The application resolves symlinks in parent components and refuses a state
 directory or database file that is itself a symlink. Windows network and
 device paths are rejected.
 
-SQLite runs with:
+Writable SQLite connections run with:
 
-- `DELETE` rollback-journal mode
+- `TRUNCATE` rollback-journal mode
 - `synchronous=FULL`
 - foreign keys and recursive triggers enabled
 - `trusted_schema=OFF`
 - one connection per Motus process
 - immediate write transactions with bounded busy retries
 
-Rollback-journal mode lets list, show, receipt, and doctor open a cleanly
-closed current ledger with `mode=ro` and `query_only=ON` when both the database
-and its directory are non-writable. If a process dies during a transaction,
-SQLite needs one writable open to roll back its hot journal before reads can
-become side-effect-free again.
+TRUNCATE commits by reducing the rollback journal to zero bytes instead of
+deleting it. This avoids delete races between Windows processes while
+preserving rollback-journal durability. A clean `ledger.db-journal` may remain
+beside the database.
+
+Rollback-journal mode lets list, show, receipt, and doctor reopen a cleanly
+closed current ledger with `mode=ro` and `query_only=ON` when the state
+directory and its files are non-writable. Read-only connections report SQLite's
+`DELETE` default because non-WAL journal modes are connection-scoped; they do
+not change or delete the clean zero-length journal. If a process dies during a
+transaction, SQLite needs one writable open to roll back its non-empty journal
+before reads can become side-effect-free again.
 
 A ledger last opened by versions through v0.1.4 is migrated from WAL on its
 next current-version open. Motus validates an isolated copy of the exact schema
-before opening the source writable or changing its persistent journal mode.
+before opening the source writable or changing it out of WAL mode.
 The transition requires exclusive write access with every process using the
 ledger stopped; records and deterministic receipt bytes do not change. Do not
 open a migrated ledger with v0.1.4 or older: those versions re-enable WAL.

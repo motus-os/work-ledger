@@ -27,8 +27,13 @@ type validationFile struct {
 }
 
 func hasRollbackJournal(database string) (bool, error) {
-	_, exists, err := inspectRegularStateFile(database+"-journal", "rollback journal")
-	return exists, err
+	info, exists, err := inspectRegularStateFile(database+"-journal", "rollback journal")
+	if err != nil || !exists {
+		return false, err
+	}
+	// TRUNCATE mode leaves a safe, zero-length journal after a clean commit.
+	// A non-empty journal may be hot and requires the recovery path.
+	return info.Size() > 0, nil
 }
 
 func inspectRegularStateFile(path, kind string) (os.FileInfo, bool, error) {
@@ -195,11 +200,11 @@ func validateRollbackSnapshot(ctx context.Context, stateDir, database string) er
 		if header.valid && header.applicationID == motusApplicationID {
 			return nil
 		}
-		_, exists, inspectErr := inspectRegularStateFile(database+"-journal", "rollback journal")
+		info, exists, inspectErr := inspectRegularStateFile(database+"-journal", "rollback journal")
 		if inspectErr != nil {
 			return inspectErr
 		}
-		if !exists {
+		if !exists || info.Size() == 0 {
 			return nil
 		}
 		err = validateLedgerSnapshot(ctx, stateDir, database, "-journal", "rollback journal", true,
@@ -467,10 +472,10 @@ func migrateWALJournal(ctx context.Context, stateDir, database string) (returnEr
 		}
 
 		var journalMode string
-		if err := db.QueryRowContext(ctx, `PRAGMA journal_mode = DELETE`).Scan(&journalMode); err != nil {
+		if err := db.QueryRowContext(ctx, `PRAGMA journal_mode = TRUNCATE`).Scan(&journalMode); err != nil {
 			return fmt.Errorf("change validated ledger from WAL to rollback journal: %w", err)
 		}
-		if !strings.EqualFold(journalMode, "delete") {
+		if !strings.EqualFold(journalMode, "truncate") {
 			return fmt.Errorf("change validated ledger from WAL to rollback journal: SQLite retained %q; stop every Motus process using this state directory and retry",
 				journalMode)
 		}

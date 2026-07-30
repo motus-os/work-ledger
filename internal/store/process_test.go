@@ -86,13 +86,23 @@ func TestStoreHelperProcess(t *testing.T) {
 		writeStoreHelperError(err)
 		os.Exit(97)
 	}
-	if mode == "unmarked-delete-hot-crash" {
+	if mode == "legacy-delete-hot-crash" {
+		var journalMode string
+		if err := ledger.db.QueryRow(`PRAGMA journal_mode = DELETE`).Scan(&journalMode); err != nil ||
+			!strings.EqualFold(journalMode, "delete") {
+			fmt.Fprintf(os.Stderr, "set legacy DELETE journal mode: mode=%q error=%v\n", journalMode, err)
+			os.Exit(82)
+		}
+	}
+	if mode == "unmarked-rollback-hot-crash" {
 		if _, err := ledger.db.Exec(`PRAGMA application_id = 0`); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(83)
 		}
 	}
-	if mode == "delete-hot-crash" || mode == "unmarked-delete-hot-crash" {
+	if mode == "rollback-hot-crash" ||
+		mode == "legacy-delete-hot-crash" ||
+		mode == "unmarked-rollback-hot-crash" {
 		if _, err := ledger.db.Exec(`PRAGMA cache_size = 1`); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(88)
@@ -494,11 +504,20 @@ func TestWALMigrationRecoversCommittedDataAfterAbruptTermination(t *testing.T) {
 }
 
 func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
+	for _, mode := range []string{"rollback-hot-crash", "legacy-delete-hot-crash"} {
+		t.Run(mode, func(t *testing.T) {
+			testOpenForReadRecoversHotRollbackJournal(t, mode)
+		})
+	}
+}
+
+func testOpenForReadRecoversHotRollbackJournal(t *testing.T, mode string) {
+	t.Helper()
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	database := filepath.Join(stateDir, DatabaseFilename)
-	marker := filepath.Join(root, "delete-hot-ready")
-	command := storeHelperCommand(t, "delete-hot-crash", stateDir, "one", marker)
+	marker := filepath.Join(root, "rollback-hot-ready")
+	command := storeHelperCommand(t, mode, stateDir, "one", marker)
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
@@ -512,7 +531,7 @@ func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			_ = command.Process.Kill()
-			t.Fatalf("DELETE helper did not become ready: %s", output.Bytes())
+			t.Fatalf("rollback helper did not become ready: %s", output.Bytes())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -538,17 +557,23 @@ func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
 		if err := os.Chmod(database, 0o400); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(journal, 0o400); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Chmod(stateDir, 0o500); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := OpenForRead(context.Background(), stateDir); !errors.Is(err, errRollbackRecoveryRequired) ||
-			!strings.Contains(err.Error(), "make the directory and database writable") {
+			!strings.Contains(err.Error(), "make the directory and its files writable") {
 			t.Fatalf("OpenForRead(non-writable hot journal) error = %v", err)
 		}
 		if err := os.Chmod(stateDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(database, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(journal, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -567,8 +592,8 @@ func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
 		crashProbe != 0 {
 		t.Fatalf("uncommitted crash table survived recovery = %d, %v", crashProbe, err)
 	}
-	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rollback journal after recovery: %v", err)
+	if hot, err := hasRollbackJournal(database); err != nil || hot {
+		t.Fatalf("hot rollback journal after recovery = %t, %v", hot, err)
 	}
 }
 
@@ -774,7 +799,7 @@ func TestUnmarkedHotRollbackJournalRecoversAfterIsolatedValidation(t *testing.T)
 			stateDir := filepath.Join(root, "state")
 			database := filepath.Join(stateDir, DatabaseFilename)
 			journal := database + "-journal"
-			crashStoreHelper(t, "unmarked-delete-hot-crash", stateDir, filepath.Join(root, "ready"))
+			crashStoreHelper(t, "unmarked-rollback-hot-crash", stateDir, filepath.Join(root, "ready"))
 			header, err := inspectSQLiteHeader(database)
 			if err != nil || !header.valid || header.applicationID != 0 {
 				t.Fatalf("unmarked hot database header = %#v, %v", header, err)
@@ -799,8 +824,8 @@ func TestUnmarkedHotRollbackJournalRecoversAfterIsolatedValidation(t *testing.T)
 			if err != nil || !recognized {
 				t.Fatalf("recovered ledger identity = %t, %v", recognized, err)
 			}
-			if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("rollback journal after recovery: %v", err)
+			if hot, err := hasRollbackJournal(database); err != nil || hot {
+				t.Fatalf("hot rollback journal after recovery = %t, %v", hot, err)
 			}
 		})
 	}
