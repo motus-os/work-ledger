@@ -215,8 +215,10 @@ func TestFindingCLIDismissalAndEmptyStore(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := runCLI(t, context.Background(), cwd, missing, &stdout, &stderr, []string{
 		"finding", "list", "--json",
-	}); code != 0 || stdout.String() != "[]\n" || stderr.Len() != 0 {
-		t.Fatalf("empty finding list = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}); code != 1 || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "no Motus ledger found in") ||
+		!strings.Contains(stderr.String(), "--state-dir or MOTUS_STATE_DIR") {
+		t.Fatalf("missing finding ledger = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("finding list created store: %v", err)
@@ -226,6 +228,20 @@ func TestFindingCLIDismissalAndEmptyStore(t *testing.T) {
 	command := append([]string{"wrap", "--"}, helperCommand(t, "success")...)
 	if code := runCLI(t, context.Background(), cwd, stateDir, io.Discard, io.Discard, command); code != 0 {
 		t.Fatal(code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{
+		"finding", "list",
+	}); code != 0 || stdout.String() != "No findings recorded.\n" || stderr.Len() != 0 {
+		t.Fatalf("empty finding list = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{
+		"finding", "list", "--json",
+	}); code != 0 || stdout.String() != "[]\n" || stderr.Len() != 0 {
+		t.Fatalf("empty finding JSON = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	runID := recordedRuns(t, stateDir)[0].ID
 	stdout.Reset()
@@ -245,6 +261,13 @@ func TestFindingCLIDismissalAndEmptyStore(t *testing.T) {
 		"finding", "close", finding.ID, "--disposition", "dismissed", "--file", "-",
 	}); code != 0 || !strings.Contains(stdout.String(), "(dismissed)") {
 		t.Fatalf("dismiss exit = %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{
+		"finding", "list", "--query", "does not exist",
+	}); code != 0 || stdout.String() != "No findings matched \"does not exist\".\n" || stderr.Len() != 0 {
+		t.Fatalf("no matching findings = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

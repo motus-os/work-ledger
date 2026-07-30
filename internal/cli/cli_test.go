@@ -180,6 +180,80 @@ func TestWrapListReceiptDoctorEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRunListDistinguishesMissingEmptyAndNoMatch(t *testing.T) {
+	cwd := t.TempDir()
+	missing := filepath.Join(cwd, "missing")
+	var stdout, stderr bytes.Buffer
+	code := runCLI(t, context.Background(), cwd, missing, &stdout, &stderr, []string{"run", "list", "--json"})
+	if code != 1 || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "no Motus ledger found in") ||
+		!strings.Contains(stderr.String(), "--state-dir or MOTUS_STATE_DIR") {
+		t.Fatalf("missing ledger = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("run list created missing ledger: %v", err)
+	}
+	invalidQueries := []struct {
+		name    string
+		command []string
+		want    string
+	}{
+		{name: "zero limit", command: []string{"run", "list", "--limit", "0"}, want: "must be between 1 and 1000"},
+		{name: "negative limit", command: []string{"run", "list", "--limit", "-1"}, want: "must be between 1 and 1000"},
+		{name: "oversized limit", command: []string{"run", "list", "--limit", "1001"}, want: "must be between 1 and 1000"},
+		{name: "negative offset", command: []string{"run", "list", "--offset", "-1"}, want: "list offset cannot be negative"},
+		{name: "invalid state", command: []string{"run", "list", "--state", "invalid"}, want: "invalid run state"},
+		{name: "invalid outcome", command: []string{"run", "list", "--outcome", "invalid"}, want: "invalid outcome"},
+	}
+	for _, query := range invalidQueries {
+		t.Run(query.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			code := runCLI(t, context.Background(), cwd, missing, &stdout, &stderr, query.command)
+			if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), query.want) {
+				t.Fatalf("invalid query on missing ledger = code %d stdout=%q stderr=%q",
+					code, stdout.String(), stderr.String())
+			}
+			if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("invalid query created missing ledger: %v", err)
+			}
+		})
+	}
+
+	stateDir := filepath.Join(cwd, "state")
+	ledger, err := store.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{"run", "list"})
+	if code != 0 || stdout.String() != "No runs recorded.\n" || stderr.Len() != 0 {
+		t.Fatalf("empty ledger = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{"run", "list", "--json"})
+	if code != 0 || stdout.String() != "[]\n" || stderr.Len() != 0 {
+		t.Fatalf("empty ledger JSON = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	command := append([]string{"wrap", "--"}, helperCommand(t, "success")...)
+	if code := runCLI(t, context.Background(), cwd, stateDir, io.Discard, io.Discard, command); code != 0 {
+		t.Fatalf("wrap exit = %d", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr,
+		[]string{"run", "list", "--outcome", "failure"})
+	if code != 0 || stdout.String() != "No runs matched the selected filters.\n" || stderr.Len() != 0 {
+		t.Fatalf("no matching runs = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestWrapForwardsStdinAndPrintsAResolvableNextCommand(t *testing.T) {
 	cwd := t.TempDir()
 	stateDir := filepath.Join(cwd, "state with space")
@@ -528,8 +602,9 @@ func TestListMissingStoreAndUsage(t *testing.T) {
 	cwd := t.TempDir()
 	stateDir := filepath.Join(cwd, "missing")
 	var stdout, stderr bytes.Buffer
-	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{"run", "list", "--json"}); code != 0 || stdout.String() != "[]\n" {
-		t.Fatalf("empty list = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	if code := runCLI(t, context.Background(), cwd, stateDir, &stdout, &stderr, []string{"run", "list", "--json"}); code != 1 ||
+		stdout.Len() != 0 || !strings.Contains(stderr.String(), "no Motus ledger found in") {
+		t.Fatalf("missing list = code %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("list created store: %v", err)

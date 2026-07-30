@@ -418,6 +418,10 @@ func runList(ctx context.Context, arguments []string, stateDir string, environme
 				if err != nil {
 					return usageError(environment.Stderr, fmt.Errorf("invalid --limit %q", value))
 				}
+				if parsed < 1 || parsed > 1000 {
+					return usageError(environment.Stderr,
+						fmt.Errorf("invalid --limit %q: must be between 1 and 1000", value))
+				}
 				options.Limit = parsed
 			case "--offset":
 				parsed, err := strconv.Atoi(value)
@@ -437,14 +441,12 @@ func runList(ctx context.Context, arguments []string, stateDir string, environme
 			return usageError(environment.Stderr, fmt.Errorf("unknown run list option %q", argument))
 		}
 	}
+	if err := store.ValidateListRunsOptions(options); err != nil {
+		return usageError(environment.Stderr, err)
+	}
 	ledger, err := store.OpenForRead(ctx, stateDir)
 	if errors.Is(err, store.ErrNotFound) {
-		if jsonOutput {
-			fmt.Fprintln(environment.Stdout, "[]")
-		} else {
-			fmt.Fprintln(environment.Stdout, "No runs recorded.")
-		}
-		return 0
+		return commandError(environment.Stderr, missingLedgerError(stateDir))
 	}
 	if err != nil {
 		return commandError(environment.Stderr, err)
@@ -461,7 +463,11 @@ func runList(ctx context.Context, arguments []string, stateDir string, environme
 		return writeJSON(environment.Stdout, runs, environment.Stderr)
 	}
 	if len(runs) == 0 {
-		fmt.Fprintln(environment.Stdout, "No runs recorded.")
+		if options.State != "" || options.Outcome != "" || options.Offset > 0 {
+			fmt.Fprintln(environment.Stdout, "No runs matched the selected filters.")
+		} else {
+			fmt.Fprintln(environment.Stdout, "No runs recorded.")
+		}
 		return 0
 	}
 	writer := tabwriter.NewWriter(environment.Stdout, 0, 4, 2, ' ', 0)
@@ -485,6 +491,10 @@ func safeHumanText(value string) string {
 		return value
 	}
 	return strconv.QuoteToGraphic(value)
+}
+
+func missingLedgerError(stateDir string) error {
+	return fmt.Errorf("no Motus ledger found in %q; select the intended state directory with --state-dir or MOTUS_STATE_DIR, or restore it", stateDir)
 }
 
 func runReceipt(ctx context.Context, arguments []string, stateDir string, environment Environment) int {

@@ -1,7 +1,12 @@
 # Motus Work Ledger
 
-Motus gives developers and coding agents a local, searchable record of command
-runs and the context tied to them.
+**Command history tells you what ran. Motus keeps what the run taught you.**
+
+Run an existing test, build, or script through Motus. It records selected facts
+about the run. When the run reveals something worth reusing, add a concise
+finding: an explanation, constraint, workaround, decision, or next step.
+Later, search the local ledger and get the finding plus its recorded run ID
+before repeating the work.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/motus-workflow-mobile.svg">
@@ -10,12 +15,13 @@ runs and the context tied to them.
 
 A **run** records selected machine facts such as the repository, commit, and
 outcome. A **finding** holds the explanation, constraint, workaround, decision,
-or next step worth keeping. A person, agent, or script chooses what to add.
-Before similar work, a later developer or agent can search the ledger and
-inspect the finding and recorded run.
+or next step worth keeping. A developer or coding agent chooses what to add;
+Motus does not infer a lesson from command output.
 
-People, agents, scripts, and CI use the same CLI. Motus runs on demand and
-requires no account, server, or vendor integration.
+Motus is one local CLI. It runs on demand, stores no argument values or raw
+command output, and requires no account, server, or vendor integration. Scripts
+and CI can invoke the same commands explicitly, but Motus does not coordinate
+their workflows or move their state.
 
 ## Install
 
@@ -203,8 +209,10 @@ record. It preserves selected run-linked context for later work.
 
 ## Use Motus with coding agents and CI
 
-Call Motus from the workflow that already runs the command. People, coding
-agents, scripts, and CI use the same CLI.
+The main workflow is deliberate: a developer or coding agent chooses the
+command, decides whether it produced a reusable finding, and searches when an
+earlier finding may help. Call Motus from the workflow that already runs the
+command.
 
 Add guidance like this to the project's `AGENTS.md` or equivalent:
 
@@ -219,23 +227,27 @@ Add guidance like this to the project's `AGENTS.md` or equivalent:
 - Resolve a finding only with a successful recorded run that addresses it.
 ```
 
-The caller decides what deserves a durable record. For unattended CI, pass an
-explicit state directory and preserve the whole directory when later jobs need
-the same runs and findings. Archive it before artifact upload so hidden files
-and private file modes survive the handoff:
+The caller decides what deserves a durable record. CI can wrap a command and
+preserve the resulting ledger when its selected run facts will be useful later.
+Pass an explicit state directory and archive the whole directory while no Motus
+process is using it. Using `-C` keeps an absolute state path from being
+re-created beneath the extraction directory:
 
 ```console
-$ tar -cf motus-state.tar .motus
+$ STATE_DIR="${MOTUS_STATE_DIR:-.motus}"
+$ tar -C "$(dirname "$STATE_DIR")" -cf motus-state.tar "$(basename "$STATE_DIR")"
 # Upload motus-state.tar as the artifact.
 
 # In a later job, after downloading the artifact:
-$ tar -xf motus-state.tar
-$ motus --state-dir .motus doctor
+$ mkdir -m 700 restored-state
+$ tar -C restored-state -xf motus-state.tar
+$ motus --state-dir "restored-state/$(basename "$STATE_DIR")" doctor
 ```
 
-Replace `.motus` in the commands with the explicit state-directory path when
-needed. Review finding text before upload. The artifact inherits the CI host's
-access and retention policy.
+Set `STATE_DIR` to the selected state path in each job. The archive stores only
+its final directory name, whether the original path was relative or absolute.
+Review finding text before upload. The artifact inherits the CI host's access
+and retention policy.
 
 ### Connect external decisions to technical work
 
@@ -245,9 +257,10 @@ closed implementation or validation run. Include an external reference only
 when it will help the next person or agent find the authoritative record.
 
 For downstream automation, `motus finding show FINDING_ID --json` returns the
-finding and its source run. A caller-owned script can use that output to create
-or update an issue, review, or project record. Motus does not route records or
-keep an external system synchronized.
+finding and the recorded fields for its origin run, plus its resolving run when
+present. A caller-owned script can use that output to create or update an
+issue, review, or project record. Motus does not route records or keep an
+external system synchronized.
 
 ## State directories and worktrees
 
@@ -259,14 +272,33 @@ Each clone and Git worktree has its own default Git root and therefore its own
 default ledger. Use the same explicit state directory only when separate
 workspaces should share records.
 
-If a list is unexpectedly empty, check the current Git root and the selected
-state directory. Run `motus doctor` against that same directory before relying
-on its records.
+If the selected ledger does not exist, list commands name the missing state
+directory and exit with status 1. An existing ledger with no records, or a
+valid query with no matches, exits with status 0; JSON list output is `[]`.
+This distinction prevents a wrong state path from looking like an empty search.
+Run `motus doctor` against the same directory before relying on its records.
 
 Motus creates state directories with private POSIX permissions. SQLite may
-create `ledger.db-wal` and `ledger.db-shm` beside `ledger.db`. Back up, move,
-or remove the entire state directory as one unit while no Motus process is
-using it.
+temporarily create `ledger.db-journal` beside `ledger.db` during a write. Back
+up, move, or remove the entire state directory as one unit while no Motus
+process is using it.
+
+Versions through v0.1.4 used SQLite WAL mode. A current Motus binary migrates a
+ledger last opened by one of those versions to rollback-journal mode. The
+migration needs exclusive write access: stop every Motus process using the
+ledger, make the state directory and database writable, and run
+`motus --state-dir PATH doctor`. Motus validates an isolated copy of the exact
+ledger schema before opening the source writable or changing its journal mode.
+
+After migration, do not open that ledger with v0.1.4 or older. Those versions
+re-enable WAL on a writable open. If that happens, stop every Motus process and
+run the current `doctor` command again before relying on read-only access.
+
+After a clean close, list, show, receipt, and doctor can inspect a current
+ledger from a genuinely read-only state directory. If a process was killed
+during a write and left `ledger.db-journal`, restore write access and run
+`doctor` once so SQLite can roll back the interrupted transaction. Then restore
+the intended read-only permissions.
 
 ## Search
 
