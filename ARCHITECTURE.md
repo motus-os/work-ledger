@@ -63,12 +63,27 @@ device paths are rejected.
 
 SQLite runs with:
 
-- WAL journal mode
+- `DELETE` rollback-journal mode
 - `synchronous=FULL`
 - foreign keys and recursive triggers enabled
 - `trusted_schema=OFF`
 - one connection per Motus process
 - immediate write transactions with bounded busy retries
+
+Rollback-journal mode lets list, show, receipt, and doctor open a cleanly
+closed current ledger with `mode=ro` and `query_only=ON` when both the database
+and its directory are non-writable. If a process dies during a transaction,
+SQLite needs one writable open to roll back its hot journal before reads can
+become side-effect-free again.
+
+A ledger last opened by versions through v0.1.4 is migrated from WAL on its
+next current-version open. Motus validates an isolated copy of the exact schema
+before opening the source writable or changing its persistent journal mode.
+The transition requires exclusive write access with every process using the
+ledger stopped; records and deterministic receipt bytes do not change. Do not
+open a migrated ledger with v0.1.4 or older: those versions re-enable WAL.
+If that happens, stop every process and run a current `motus doctor` to migrate
+the ledger again.
 
 The schema has five tables: append-enforced metadata, runs, append-only events,
 findings, and finding closures. A run moves once from `open` to `closed`.

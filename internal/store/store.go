@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,9 +23,15 @@ import (
 const (
 	defaultBusyTimeout = 500 * time.Millisecond
 	defaultBusyRetries = 4
+	motusApplicationID = 0x4d4f5455 // "MOTU"
 )
 
-var errSchemaMigrationRequired = errors.New("store: schema migration required")
+var (
+	errSchemaMigrationRequired   = errors.New("store: schema migration required")
+	errJournalMigrationRequired  = errors.New("store: journal mode migration required")
+	errIdentityMigrationRequired = errors.New("store: identity marker migration required")
+	errRollbackRecoveryRequired  = errors.New("store: rollback recovery required")
+)
 
 type Store struct {
 	db          *sql.DB
@@ -41,21 +49,43 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 	return open(ctx, stateDir, false, false)
 }
 
-// OpenReadOnly opens an existing current-schema ledger without creating or
-// migrating it. It fails with ErrNotFound when the fixed database is absent.
+// OpenReadOnly opens an existing current-schema, rollback-journal ledger
+// without creating or migrating it. It fails with ErrNotFound when the fixed
+// database is absent.
 func OpenReadOnly(ctx context.Context, stateDir string) (*Store, error) {
 	return open(ctx, stateDir, true, true)
 }
 
 // OpenForRead opens an existing ledger without creating one. A valid older
-// schema is migrated atomically before the ledger is reopened read-only.
+// schema or WAL-mode ledger is migrated before the ledger is reopened
+// read-only.
 func OpenForRead(ctx context.Context, stateDir string) (*Store, error) {
 	ledger, err := OpenReadOnly(ctx, stateDir)
-	if !errors.Is(err, errSchemaMigrationRequired) {
+	schemaMigration := errors.Is(err, errSchemaMigrationRequired)
+	journalMigration := errors.Is(err, errJournalMigrationRequired)
+	identityMigration := errors.Is(err, errIdentityMigrationRequired)
+	rollbackRecovery := errors.Is(err, sqlite3.READONLY_ROLLBACK) ||
+		errors.Is(err, sqlite3.READONLY_RECOVERY) ||
+		errors.Is(err, errRollbackRecoveryRequired)
+	if !schemaMigration && !journalMigration && !identityMigration && !rollbackRecovery {
 		return ledger, err
 	}
 	migrator, err := open(ctx, stateDir, false, true)
 	if err != nil {
+		if errors.Is(err, ErrInvalidSchema) {
+			return nil, err
+		}
+		if journalMigration {
+			if errors.Is(err, errJournalMigrationRequired) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: the ledger uses WAL and needs exclusive writable access; stop every Motus process using this state directory, make the directory and database writable, then retry: %w",
+				errJournalMigrationRequired, err)
+		}
+		if rollbackRecovery {
+			return nil, fmt.Errorf("%w: an interrupted write left a rollback journal; stop every Motus process using this state directory, make the directory and database writable, then retry: %w",
+				errRollbackRecoveryRequired, err)
+		}
 		return nil, fmt.Errorf("migrate ledger: %w", err)
 	}
 	if err := migrator.Close(); err != nil {
@@ -68,6 +98,45 @@ func open(ctx context.Context, stateDir string, readOnly, existingOnly bool) (*S
 	dir, database, err := prepareStatePath(stateDir, existingOnly)
 	if err != nil {
 		return nil, err
+	}
+	rollbackJournal, err := hasRollbackJournal(database)
+	if err != nil {
+		return nil, err
+	}
+	if rollbackJournal {
+		header, err := inspectSQLiteHeader(database)
+		if err != nil {
+			return nil, err
+		}
+		if header.valid && header.applicationID != 0 && header.applicationID != motusApplicationID {
+			return nil, fmt.Errorf("%w: database %q has an unexpected application identity and a rollback journal",
+				ErrInvalidSchema, database)
+		}
+		if readOnly && (!header.valid || header.applicationID != motusApplicationID) {
+			return nil, fmt.Errorf("%w: database %q needs writable validation and rollback recovery",
+				errRollbackRecoveryRequired, database)
+		}
+		if !readOnly {
+			if err := validateRollbackSnapshot(ctx, dir, database); err != nil {
+				return nil, err
+			}
+		}
+	}
+	journalMigration, err := requiresJournalMigration(database)
+	if err != nil {
+		return nil, err
+	}
+	if journalMigration {
+		if readOnly {
+			return nil, fmt.Errorf("%w: database %q uses WAL", errJournalMigrationRequired, database)
+		}
+		if err := migrateWALJournal(ctx, dir, database); err != nil {
+			if errors.Is(err, ErrInvalidSchema) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: the ledger uses WAL and needs exclusive writable access; stop every Motus process using this state directory, make the directory and database writable, then retry: %w",
+				errJournalMigrationRequired, err)
+		}
 	}
 
 	dsn := sqliteDSN(database, readOnly, defaultBusyTimeout)
@@ -122,6 +191,19 @@ func (s *Store) Close() error {
 }
 
 func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string {
+	journalMode := ""
+	if !readOnly {
+		journalMode = "DELETE"
+	}
+	return sqliteDSNWithJournalMode(database, readOnly, busyTimeout, journalMode)
+}
+
+func sqliteDSNWithJournalMode(
+	database string,
+	readOnly bool,
+	busyTimeout time.Duration,
+	journalMode string,
+) string {
 	u := sqliteFileURL(database, runtime.GOOS == "windows")
 	q := u.Query()
 	// Install the busy handler before pragmas such as journal_mode that may
@@ -134,7 +216,9 @@ func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string
 		// prepareStatePath creates the file first, so mode=rw prevents the driver
 		// from following a late missing-path condition by creating elsewhere.
 		q.Set("mode", "rw")
-		q.Add("_pragma", "journal_mode(WAL)")
+		if journalMode != "" {
+			q.Add("_pragma", "journal_mode("+journalMode+")")
+		}
 		q.Set("_txlock", "immediate")
 	}
 	q.Add("_pragma", "foreign_keys(ON)")
@@ -167,6 +251,61 @@ func escapeSQLiteURIPath(path string) string {
 		parts[i] = url.PathEscape(parts[i])
 	}
 	return strings.Join(parts, "/")
+}
+
+func requiresJournalMigration(database string) (bool, error) {
+	header, err := inspectSQLiteHeader(database)
+	if err != nil {
+		return false, err
+	}
+	if !header.valid {
+		return false, nil
+	}
+	// SQLite file-header bytes 18 and 19 are both 2 for WAL databases and 1
+	// for rollback-journal databases. Treat either WAL marker as requiring a
+	// writable migration so a partially changed header is never opened as a
+	// sidecar-free read-only ledger.
+	return header.writeVersion == 2 || header.readVersion == 2, nil
+}
+
+type sqliteHeader struct {
+	valid         bool
+	writeVersion  byte
+	readVersion   byte
+	applicationID uint32
+}
+
+func inspectSQLiteHeader(database string) (sqliteHeader, error) {
+	file, err := os.Open(database)
+	if err != nil {
+		return sqliteHeader{}, fmt.Errorf("inspect ledger header: %w", err)
+	}
+	defer file.Close()
+
+	var header [72]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return sqliteHeader{}, nil
+		}
+		return sqliteHeader{}, fmt.Errorf("inspect ledger header: %w", err)
+	}
+	if string(header[:16]) != "SQLite format 3\x00" {
+		return sqliteHeader{}, nil
+	}
+	return sqliteHeader{
+		valid:         true,
+		writeVersion:  header[18],
+		readVersion:   header[19],
+		applicationID: binary.BigEndian.Uint32(header[68:72]),
+	}, nil
+}
+
+func hasMotusApplicationID(database string) (bool, error) {
+	header, err := inspectSQLiteHeader(database)
+	if err != nil {
+		return false, err
+	}
+	return header.valid && header.applicationID == motusApplicationID, nil
 }
 
 func prepareStatePath(stateDir string, existingOnly bool) (string, string, error) {
@@ -317,6 +456,10 @@ func (s *Store) pingWithRetry(ctx context.Context) error {
 }
 
 func (s *Store) verifyPragmas(ctx context.Context) error {
+	return s.verifyPragmasForJournal(ctx, "delete")
+}
+
+func (s *Store) verifyPragmasForJournal(ctx context.Context, expectedJournalMode string) error {
 	var foreignKeys, busyTimeout, synchronous, recursiveTriggers, trustedSchema, queryOnly int
 	var journalMode string
 	if err := s.db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
@@ -344,7 +487,7 @@ func (s *Store) verifyPragmas(ctx context.Context) error {
 	if s.readOnly {
 		wantQueryOnly = 1
 	}
-	if foreignKeys != 1 || busyTimeout <= 0 || !strings.EqualFold(journalMode, "wal") || synchronous != 2 ||
+	if foreignKeys != 1 || busyTimeout <= 0 || !strings.EqualFold(journalMode, expectedJournalMode) || synchronous != 2 ||
 		recursiveTriggers != 1 || trustedSchema != 0 || queryOnly != wantQueryOnly {
 		return fmt.Errorf("configure sqlite: foreign_keys=%d busy_timeout=%d journal_mode=%s synchronous=%d recursive_triggers=%d trusted_schema=%d query_only=%d",
 			foreignKeys, busyTimeout, journalMode, synchronous, recursiveTriggers, trustedSchema, queryOnly)
@@ -426,15 +569,63 @@ func (s *Store) initializeSchema(ctx context.Context) error {
 				return fmt.Errorf("finish schema migration: %w", err)
 			}
 		case SchemaVersion:
-			// The current schema is validated below.
+			if err := validateSchemaVersion(ctx, tx, SchemaVersion, schemaStatements); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%w: unsupported user_version %d", ErrInvalidSchema, version)
+		}
+		applicationID, err := readApplicationID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if applicationID != 0 && applicationID != motusApplicationID {
+			return fmt.Errorf("%w: unexpected application_id %d", ErrInvalidSchema, applicationID)
+		}
+		if _, err := tx.ExecContext(ctx, `PRAGMA application_id = `+strconv.FormatUint(motusApplicationID, 10)); err != nil {
+			return fmt.Errorf("set Motus application identity: %w", err)
 		}
 		return validateSchema(ctx, tx)
 	})
 }
 
 func validateSchema(ctx context.Context, q sqlReadWriter) error {
+	structureErr := validateSchemaStructure(ctx, q)
+	if structureErr != nil && !errors.Is(structureErr, errSchemaMigrationRequired) {
+		return structureErr
+	}
+	applicationID, err := readApplicationID(ctx, q)
+	if err != nil {
+		return err
+	}
+	switch applicationID {
+	case motusApplicationID:
+	case 0:
+		if structureErr == nil {
+			return fmt.Errorf("%w: database has no Motus application identity", errIdentityMigrationRequired)
+		}
+	default:
+		return fmt.Errorf("%w: unexpected application_id %d", ErrInvalidSchema, applicationID)
+	}
+	return structureErr
+}
+
+func validateSchemaBeforeJournalMigration(ctx context.Context, q sqlReadWriter) error {
+	structureErr := validateSchemaStructure(ctx, q)
+	if structureErr != nil && !errors.Is(structureErr, errSchemaMigrationRequired) {
+		return structureErr
+	}
+	applicationID, err := readApplicationID(ctx, q)
+	if err != nil {
+		return err
+	}
+	if applicationID != 0 && applicationID != motusApplicationID {
+		return fmt.Errorf("%w: unexpected application_id %d", ErrInvalidSchema, applicationID)
+	}
+	return structureErr
+}
+
+func validateSchemaStructure(ctx context.Context, q sqlReadWriter) error {
 	var userVersion int
 	if err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
 		return fmt.Errorf("%w: read user_version: %v", ErrInvalidSchema, err)
@@ -447,6 +638,17 @@ func validateSchema(ctx context.Context, q sqlReadWriter) error {
 		return fmt.Errorf("%w: schema version %d", errSchemaMigrationRequired, userVersion)
 	}
 	return validateSchemaVersion(ctx, q, SchemaVersion, schemaStatements)
+}
+
+func readApplicationID(ctx context.Context, q sqlReadWriter) (uint32, error) {
+	var applicationID int64
+	if err := q.QueryRowContext(ctx, `PRAGMA application_id`).Scan(&applicationID); err != nil {
+		return 0, fmt.Errorf("%w: read application_id: %v", ErrInvalidSchema, err)
+	}
+	if applicationID < 0 || applicationID > int64(^uint32(0)) {
+		return 0, fmt.Errorf("%w: application_id %d is out of range", ErrInvalidSchema, applicationID)
+	}
+	return uint32(applicationID), nil
 }
 
 func validateSchemaVersion(

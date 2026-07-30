@@ -8,6 +8,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,8 +33,95 @@ func TestSQLiteDSNInstallsBusyTimeoutBeforeJournalMode(t *testing.T) {
 	if got, want := pragmas[0], "busy_timeout("+strconv.FormatInt(defaultBusyTimeout.Milliseconds(), 10)+")"; got != want {
 		t.Fatalf("first pragma = %q, want %q", got, want)
 	}
-	if got, want := pragmas[1], "journal_mode(WAL)"; got != want {
+	if got, want := pragmas[1], "journal_mode(DELETE)"; got != want {
 		t.Fatalf("second pragma = %q, want %q", got, want)
+	}
+}
+
+func TestValidationDirectoryStaysOutsideStateEvenWhenTMPDIRPointsInside(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TMPDIR controls os.TempDir on POSIX")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", stateDir)
+	before, err := os.Stat(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validationDir, err := createValidationDirectory(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside, err := pathWithin(validationDir, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inside {
+		t.Fatalf("validation directory %q is inside state directory %q", validationDir, stateDir)
+	}
+	if err := os.RemoveAll(validationDir); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) ||
+		before.Mode() != after.Mode() ||
+		before.Size() != after.Size() ||
+		!before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("validation directory fallback changed state directory metadata: before=%#v after=%#v",
+			before, after)
+	}
+}
+
+func setJournalModeForTest(t *testing.T, database, mode string) {
+	t.Helper()
+	u := sqliteFileURL(database, runtime.GOOS == "windows")
+	q := u.Query()
+	q.Set("mode", "rw")
+	q.Add("_pragma", "busy_timeout("+strconv.FormatInt(defaultBusyTimeout.Milliseconds(), 10)+")")
+	q.Set("_dqs", "false")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("sqlite3", u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := db.QueryRow(`PRAGMA journal_mode = ` + mode).Scan(&got); err != nil {
+		_ = db.Close()
+		t.Fatalf("set journal mode %s: %v", mode, err)
+	}
+	if !strings.EqualFold(got, mode) {
+		_ = db.Close()
+		t.Fatalf("journal mode = %q, want %q", got, mode)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setApplicationIDForTest(t *testing.T, database string, applicationID uint32) {
+	t.Helper()
+	db, err := sql.Open("sqlite3",
+		sqliteDSNWithJournalMode(database, false, defaultBusyTimeout, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA application_id = ` + strconv.FormatUint(uint64(applicationID), 10)); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	var got uint32
+	if err := db.QueryRow(`PRAGMA application_id`).Scan(&got); err != nil || got != applicationID {
+		_ = db.Close()
+		t.Fatalf("application_id = %d, %v; want %d", got, err, applicationID)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -237,6 +327,424 @@ func TestOpenReadOnlyDoesNotCreateAndCannotWrite(t *testing.T) {
 	})
 	if !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("OpenForRead current schema StartRun() error = %v, want ErrReadOnly", err)
+	}
+}
+
+func TestOpenReadOnlyWorksWithNonWritableState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode semantics")
+	}
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	writable, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run_nonwritable_read"
+	startTestRun(t, writable, runID)
+	closeTestRun(t, writable, runID)
+	if _, err := writable.AddFinding(ctx, AddFindingParams{
+		ID:          "finding_nonwritable_read",
+		OriginRunID: runID,
+		Content:     FindingContent{Summary: "Read-only state remains useful."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := writable.ProjectReceipt(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	contentsBefore, err := os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoBefore, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entriesBefore, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(database, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o700)
+		_ = os.Chmod(database, 0o600)
+	})
+
+	for name, opener := range map[string]func(context.Context, string) (*Store, error){
+		"OpenReadOnly": OpenReadOnly,
+		"OpenForRead":  OpenForRead,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ledger, err := opener(ctx, stateDir)
+			if err != nil {
+				t.Fatalf("%s() error = %v", name, err)
+			}
+			runs, err := ledger.ListRuns(ctx, ListRunsOptions{})
+			if err != nil || len(runs) != 1 || runs[0].ID != runID {
+				_ = ledger.Close()
+				t.Fatalf("ListRuns() = %#v, %v", runs, err)
+			}
+			finding, err := ledger.GetFinding(ctx, "finding_nonwritable_read")
+			if err != nil || finding.OriginRunID != runID {
+				_ = ledger.Close()
+				t.Fatalf("GetFinding() = %#v, %v", finding, err)
+			}
+			receiptAfter, err := ledger.ProjectReceipt(ctx, runID)
+			if err != nil || !bytes.Equal(receiptBefore.Bytes(), receiptAfter.Bytes()) {
+				_ = ledger.Close()
+				t.Fatalf("ProjectReceipt() changed: %v", err)
+			}
+			report, err := ledger.Doctor(ctx)
+			if err != nil || !report.Consistent {
+				_ = ledger.Close()
+				t.Fatalf("Doctor() = %#v, %v", report, err)
+			}
+			if err := ledger.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	contentsAfter, err := os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoAfter, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entriesAfter, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contentsBefore, contentsAfter) {
+		t.Fatal("read-only opens changed the database bytes")
+	}
+	if !infoAfter.ModTime().Equal(infoBefore.ModTime()) || infoAfter.Size() != infoBefore.Size() {
+		t.Fatalf("read-only opens changed database metadata: before=%#v after=%#v", infoBefore, infoAfter)
+	}
+	if got, want := directoryEntryNames(entriesAfter), directoryEntryNames(entriesBefore); !slices.Equal(got, want) {
+		t.Fatalf("state files after read-only opens = %q, want %q", got, want)
+	}
+}
+
+func directoryEntryNames(entries []os.DirEntry) []string {
+	names := make([]string, len(entries))
+	for index, entry := range entries {
+		names[index] = entry.Name()
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestOpenForReadMigratesWALWithoutChangingRecords(t *testing.T) {
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	writable, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run_wal_upgrade"
+	startTestRun(t, writable, runID)
+	closeTestRun(t, writable, runID)
+	if _, err := writable.AddFinding(ctx, AddFindingParams{
+		ID:          "finding_wal_upgrade",
+		OriginRunID: runID,
+		Content:     FindingContent{Summary: "Preserve this finding."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := writable.ProjectReceipt(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	setJournalModeForTest(t, database, "WAL")
+	requiresMigration, err := requiresJournalMigration(database)
+	if err != nil || !requiresMigration {
+		t.Fatalf("requiresJournalMigration(WAL) = %t, %v", requiresMigration, err)
+	}
+	if _, err := OpenReadOnly(ctx, stateDir); !errors.Is(err, errJournalMigrationRequired) {
+		t.Fatalf("OpenReadOnly(WAL) error = %v, want journal migration required", err)
+	}
+
+	ledger, err := OpenForRead(ctx, stateDir)
+	if err != nil {
+		t.Fatalf("OpenForRead(WAL) error = %v", err)
+	}
+	defer ledger.Close()
+	receiptAfter, err := ledger.ProjectReceipt(ctx, runID)
+	if err != nil || !bytes.Equal(receiptBefore.Bytes(), receiptAfter.Bytes()) {
+		t.Fatalf("receipt after WAL migration changed: %v", err)
+	}
+	finding, err := ledger.GetFinding(ctx, "finding_wal_upgrade")
+	if err != nil || finding.Content.Summary != "Preserve this finding." {
+		t.Fatalf("finding after WAL migration = %#v, %v", finding, err)
+	}
+	var journalMode string
+	if err := ledger.db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil ||
+		!strings.EqualFold(journalMode, "delete") {
+		t.Fatalf("journal mode after migration = %q, %v", journalMode, err)
+	}
+	report, err := ledger.Doctor(ctx)
+	if err != nil || !report.Consistent {
+		t.Fatalf("Doctor() after WAL migration = %#v, %v", report, err)
+	}
+	requiresMigration, err = requiresJournalMigration(database)
+	if err != nil || requiresMigration {
+		t.Fatalf("requiresJournalMigration(after) = %t, %v", requiresMigration, err)
+	}
+	recognized, err := hasMotusApplicationID(database)
+	if err != nil || !recognized {
+		t.Fatalf("application identity after WAL migration = %t, %v", recognized, err)
+	}
+}
+
+func TestWALMigrationCommitsIdentityBeforeReturning(t *testing.T) {
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	ledger, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run_unmarked_wal_upgrade"
+	startTestRun(t, ledger, runID)
+	closeTestRun(t, ledger, runID)
+	receiptBefore, err := ledger.ProjectReceipt(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	setApplicationIDForTest(t, database, 0)
+	setJournalModeForTest(t, database, "WAL")
+
+	wal, err := sql.Open("sqlite3",
+		sqliteDSNWithJournalMode(database, false, defaultBusyTimeout, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureMotusIdentity(ctx, wal); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpointMotusIdentity(ctx, wal, database); err != nil {
+		t.Fatal(err)
+	}
+	header, err := inspectSQLiteHeader(database)
+	if err != nil || !header.valid ||
+		header.writeVersion != 2 || header.readVersion != 2 ||
+		header.applicationID != motusApplicationID {
+		t.Fatalf("header before WAL-to-DELETE transition = %#v, %v", header, err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := migrateWALJournal(ctx, stateDir, database); err != nil {
+		t.Fatalf("migrateWALJournal(unmarked WAL) = %v", err)
+	}
+	header, err = inspectSQLiteHeader(database)
+	if err != nil || !header.valid ||
+		header.writeVersion != 1 || header.readVersion != 1 ||
+		header.applicationID != motusApplicationID {
+		t.Fatalf("header immediately after WAL migration = %#v, %v", header, err)
+	}
+	ledger, err = OpenReadOnly(ctx, stateDir)
+	if err != nil {
+		t.Fatalf("OpenReadOnly(immediately migrated ledger) = %v", err)
+	}
+	defer ledger.Close()
+	receiptAfter, err := ledger.ProjectReceipt(ctx, runID)
+	if err != nil || !bytes.Equal(receiptBefore.Bytes(), receiptAfter.Bytes()) {
+		t.Fatalf("receipt after identity-first WAL migration changed: %v", err)
+	}
+}
+
+func TestCurrentVersionRemigratesLedgerAfterOlderVersionReenablesWAL(t *testing.T) {
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	ledger, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run_repeated_wal_upgrade"
+	startTestRun(t, ledger, runID)
+	closeTestRun(t, ledger, runID)
+	receiptBefore, err := ledger.ProjectReceipt(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	setApplicationIDForTest(t, database, 0)
+	setJournalModeForTest(t, database, "WAL")
+	firstCurrentOpen, err := OpenForRead(ctx, stateDir)
+	if err != nil {
+		t.Fatalf("first current open = %v", err)
+	}
+	if err := firstCurrentOpen.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Versions through v0.1.4 request WAL on every writable open. Re-enabling
+	// WAL here emulates opening this already migrated ledger with that binary.
+	setJournalModeForTest(t, database, "WAL")
+	if required, err := requiresJournalMigration(database); err != nil || !required {
+		t.Fatalf("older-version reopen requires migration = %t, %v", required, err)
+	}
+	secondCurrentOpen, err := OpenForRead(ctx, stateDir)
+	if err != nil {
+		t.Fatalf("second current open after older-version reopen = %v", err)
+	}
+	defer secondCurrentOpen.Close()
+	receiptAfter, err := secondCurrentOpen.ProjectReceipt(ctx, runID)
+	if err != nil || !bytes.Equal(receiptBefore.Bytes(), receiptAfter.Bytes()) {
+		t.Fatalf("receipt after repeated WAL migration changed: %v", err)
+	}
+	if required, err := requiresJournalMigration(database); err != nil || required {
+		t.Fatalf("second current open left WAL migration required = %t, %v", required, err)
+	}
+}
+
+func TestWALMigrationRejectsUnknownSchemaWithoutChangingJournalMode(t *testing.T) {
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(stateDir, DatabaseFilename)
+	file, err := os.OpenFile(database, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3",
+		sqliteDSNWithJournalMode(database, false, defaultBusyTimeout, "WAL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sentinel(value TEXT)`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	contentsBefore, err := os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenForRead(ctx, stateDir); !errors.Is(err, ErrInvalidSchema) {
+		t.Fatalf("OpenForRead(unknown WAL schema) error = %v, want ErrInvalidSchema", err)
+	}
+	contentsAfter, err := os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contentsBefore, contentsAfter) {
+		t.Fatal("failed WAL validation changed the database bytes")
+	}
+	requiresMigration, err := requiresJournalMigration(database)
+	if err != nil || !requiresMigration {
+		t.Fatalf("failed WAL validation changed journal mode: requires=%t err=%v", requiresMigration, err)
+	}
+	recognized, err := hasMotusApplicationID(database)
+	if err != nil || recognized {
+		t.Fatalf("failed WAL validation changed application identity = %t, %v", recognized, err)
+	}
+}
+
+func TestOpenForReadAddsIdentityOnlyAfterValidatingCurrentSchema(t *testing.T) {
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	ledger, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run_identity_upgrade"
+	startTestRun(t, ledger, runID)
+	closeTestRun(t, ledger, runID)
+	receiptBefore, err := ledger.ProjectReceipt(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.db.Exec(`PRAGMA application_id = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenReadOnly(ctx, stateDir); !errors.Is(err, errIdentityMigrationRequired) {
+		t.Fatalf("OpenReadOnly(unmarked current schema) error = %v", err)
+	}
+	ledger, err = OpenForRead(ctx, stateDir)
+	if err != nil {
+		t.Fatalf("OpenForRead(unmarked current schema) = %v", err)
+	}
+	defer ledger.Close()
+	receiptAfter, err := ledger.ProjectReceipt(ctx, runID)
+	if err != nil || !bytes.Equal(receiptBefore.Bytes(), receiptAfter.Bytes()) {
+		t.Fatalf("identity migration changed receipt: %v", err)
+	}
+	recognized, err := hasMotusApplicationID(database)
+	if err != nil || !recognized {
+		t.Fatalf("identity after migration = %t, %v", recognized, err)
+	}
+}
+
+func TestOpenForReadExplainsReadOnlyWALMigration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode semantics")
+	}
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	ledger, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	setJournalModeForTest(t, database, "WAL")
+	if err := os.Chmod(database, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o700)
+		_ = os.Chmod(database, 0o600)
+	})
+	if _, err := OpenForRead(ctx, stateDir); !errors.Is(err, errJournalMigrationRequired) ||
+		!strings.Contains(err.Error(), "needs exclusive writable access") {
+		t.Fatalf("OpenForRead(read-only WAL) error = %v", err)
 	}
 }
 

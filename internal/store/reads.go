@@ -84,25 +84,13 @@ func listEvents(ctx context.Context, q sqlReadWriter, runID string) ([]Event, er
 }
 
 func (s *Store) ListRuns(ctx context.Context, options ListRunsOptions) ([]Run, error) {
+	if err := ValidateListRunsOptions(options); err != nil {
+		return nil, err
+	}
 	if options.Limit == 0 {
 		options.Limit = 100
 	}
-	if options.Limit < 0 || options.Limit > 1000 {
-		return nil, fmt.Errorf("%w: list limit must be between 1 and 1000", ErrInvalid)
-	}
-	if options.Offset < 0 {
-		return nil, fmt.Errorf("%w: list offset cannot be negative", ErrInvalid)
-	}
-	if options.State != "" && options.State != RunOpen && options.State != RunClosed {
-		return nil, fmt.Errorf("%w: invalid run state %q", ErrInvalid, options.State)
-	}
-	if options.Outcome != "" {
-		switch options.Outcome {
-		case OutcomeSuccess, OutcomeFailure, OutcomeAborted:
-		default:
-			return nil, fmt.Errorf("%w: invalid outcome %q", ErrInvalid, options.Outcome)
-		}
-	}
+
 	query := `SELECT ` + runColumns + ` FROM runs`
 	conditions := make([]string, 0, 2)
 	args := make([]any, 0, 4)
@@ -136,4 +124,25 @@ func (s *Store) ListRuns(ctx context.Context, options ListRunsOptions) ([]Run, e
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
 	return runs, nil
+}
+
+// ValidateListRunsOptions validates filters without reading the Store.
+func ValidateListRunsOptions(options ListRunsOptions) error {
+	if options.Limit < 0 || options.Limit > 1000 {
+		return fmt.Errorf("%w: list limit must be between 1 and 1000", ErrInvalid)
+	}
+	if options.Offset < 0 {
+		return fmt.Errorf("%w: list offset cannot be negative", ErrInvalid)
+	}
+	if options.State != "" && options.State != RunOpen && options.State != RunClosed {
+		return fmt.Errorf("%w: invalid run state %q", ErrInvalid, options.State)
+	}
+	if options.Outcome != "" {
+		switch options.Outcome {
+		case OutcomeSuccess, OutcomeFailure, OutcomeAborted:
+		default:
+			return fmt.Errorf("%w: invalid outcome %q", ErrInvalid, options.Outcome)
+		}
+	}
+	return nil
 }

@@ -244,12 +244,7 @@ func runFindingList(ctx context.Context, arguments []string, stateDir string, en
 	}
 	ledger, err := store.OpenForRead(ctx, stateDir)
 	if errors.Is(err, store.ErrNotFound) {
-		if jsonOutput {
-			fmt.Fprintln(environment.Stdout, "[]")
-		} else {
-			fmt.Fprintln(environment.Stdout, "No findings recorded.")
-		}
-		return 0
+		return commandError(environment.Stderr, missingLedgerError(stateDir))
 	}
 	if err != nil {
 		return commandError(environment.Stderr, err)
@@ -263,7 +258,14 @@ func runFindingList(ctx context.Context, arguments []string, stateDir string, en
 		return writeJSON(environment.Stdout, findings, environment.Stderr)
 	}
 	if len(findings) == 0 {
-		fmt.Fprintln(environment.Stdout, "No findings recorded.")
+		switch {
+		case options.Query != "":
+			fmt.Fprintf(environment.Stdout, "No findings matched %s.\n", strconv.QuoteToGraphic(options.Query))
+		case options.State != "" || options.Offset > 0:
+			fmt.Fprintln(environment.Stdout, "No findings matched the selected filters.")
+		default:
+			fmt.Fprintln(environment.Stdout, "No findings recorded.")
+		}
 		return 0
 	}
 	writer := tabwriter.NewWriter(environment.Stdout, 0, 4, 2, ' ', 0)
