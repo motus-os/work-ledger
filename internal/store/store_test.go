@@ -20,21 +20,23 @@ import (
 
 var testEpoch = time.Date(2026, 7, 21, 12, 0, 0, 123456789, time.UTC)
 
-func TestSQLiteDSNInstallsBusyTimeoutBeforeJournalMode(t *testing.T) {
+func TestSQLiteDSNDoesNotRequestJournalModeOnOpen(t *testing.T) {
 	dsn := sqliteDSN(filepath.Join(t.TempDir(), DatabaseFilename), false, defaultBusyTimeout)
 	parsed, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pragmas := parsed.Query()["_pragma"]
-	if len(pragmas) < 2 {
+	if len(pragmas) == 0 {
 		t.Fatalf("pragmas = %q", pragmas)
 	}
 	if got, want := pragmas[0], "busy_timeout("+strconv.FormatInt(defaultBusyTimeout.Milliseconds(), 10)+")"; got != want {
 		t.Fatalf("first pragma = %q, want %q", got, want)
 	}
-	if got, want := pragmas[1], "journal_mode(DELETE)"; got != want {
-		t.Fatalf("second pragma = %q, want %q", got, want)
+	for _, pragma := range pragmas {
+		if strings.HasPrefix(strings.ToLower(pragma), "journal_mode(") {
+			t.Fatalf("open DSN changes journal mode: %q", pragmas)
+		}
 	}
 }
 

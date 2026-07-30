@@ -16,6 +16,8 @@ import (
 
 var errLedgerChangedDuringValidation = errors.New("store: ledger changed during validation")
 
+const rollbackValidationRetries = 20
+
 type validationFile struct {
 	source      string
 	destination string
@@ -185,7 +187,14 @@ func validateWALSnapshot(ctx context.Context, stateDir, database string) error {
 
 func validateRollbackSnapshot(ctx context.Context, stateDir, database string) error {
 	var err error
-	for attempt := 0; attempt <= defaultBusyRetries; attempt++ {
+	for attempt := 0; attempt <= rollbackValidationRetries; attempt++ {
+		header, headerErr := inspectSQLiteHeader(database)
+		if headerErr != nil {
+			return headerErr
+		}
+		if header.valid && header.applicationID == motusApplicationID {
+			return nil
+		}
 		_, exists, inspectErr := inspectRegularStateFile(database+"-journal", "rollback journal")
 		if inspectErr != nil {
 			return inspectErr
@@ -198,7 +207,7 @@ func validateRollbackSnapshot(ctx context.Context, stateDir, database string) er
 		if !errors.Is(err, errLedgerChangedDuringValidation) {
 			return err
 		}
-		if attempt == defaultBusyRetries {
+		if attempt == rollbackValidationRetries {
 			break
 		}
 		if sleepErr := sleepContext(ctx, retryDelay(attempt)); sleepErr != nil {

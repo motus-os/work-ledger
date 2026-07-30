@@ -116,7 +116,7 @@ func open(ctx context.Context, stateDir string, readOnly, existingOnly bool) (*S
 			return nil, fmt.Errorf("%w: database %q needs writable validation and rollback recovery",
 				errRollbackRecoveryRequired, database)
 		}
-		if !readOnly {
+		if !readOnly && (!header.valid || header.applicationID != motusApplicationID) {
 			if err := validateRollbackSnapshot(ctx, dir, database); err != nil {
 				return nil, err
 			}
@@ -191,11 +191,10 @@ func (s *Store) Close() error {
 }
 
 func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string {
-	journalMode := ""
-	if !readOnly {
-		journalMode = "DELETE"
-	}
-	return sqliteDSNWithJournalMode(database, readOnly, busyTimeout, journalMode)
+	// New SQLite databases default to DELETE mode, and WAL migration changes
+	// existing Motus ledgers explicitly. Reissuing journal_mode on every open
+	// needlessly requests an exclusive lock while other processes may be writing.
+	return sqliteDSNWithJournalMode(database, readOnly, busyTimeout, "")
 }
 
 func sqliteDSNWithJournalMode(

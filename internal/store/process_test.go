@@ -157,7 +157,7 @@ func TestStoreHelperProcess(t *testing.T) {
 			})
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			writeStoreHelperError(err)
 			os.Exit(93)
 		}
 	}
@@ -322,6 +322,18 @@ func storeHelperCommand(t *testing.T, arguments ...string) *exec.Cmd {
 	command := exec.Command(executable, commandArguments...)
 	command.Env = append(os.Environ(), "MOTUS_STORE_HELPER=1")
 	return command
+}
+
+func writeStoreHelperError(err error) {
+	fmt.Fprintln(os.Stderr, err)
+	var code sqlite3.ExtendedErrorCode
+	if errors.As(err, &code) {
+		fmt.Fprintf(os.Stderr, "sqlite_code=%d sqlite_extended_code=%d\n", code.Code(), code)
+	}
+	var detail *sqlite3.Error
+	if errors.As(err, &detail) && detail.Unwrap() != nil {
+		fmt.Fprintf(os.Stderr, "sqlite_system_error=%v\n", detail.Unwrap())
+	}
 }
 
 func TestMultipleProcessesWriteWithoutGaps(t *testing.T) {
