@@ -278,15 +278,15 @@ valid query with no matches, exits with status 0; JSON list output is `[]`.
 This distinction prevents a wrong state path from looking like an empty search.
 Run `motus doctor` against the same directory before relying on its records.
 
-Motus creates state directories with private POSIX permissions. SQLite may
-temporarily create `ledger.db-journal` beside `ledger.db` during a write. Back
-up, move, or remove the entire state directory as one unit while no Motus
-process is using it.
+Motus creates state directories with private POSIX permissions. SQLite creates
+`ledger.db-journal` beside `ledger.db` during a write and may retain it as a
+zero-length file after a clean close. Back up, move, or remove the entire state
+directory as one unit while no Motus process is using it.
 
 Versions through v0.1.4 used SQLite WAL mode. A current Motus binary migrates a
 ledger last opened by one of those versions to rollback-journal mode. The
 migration needs exclusive write access: stop every Motus process using the
-ledger, make the state directory and database writable, and run
+ledger, make the state directory and its files writable, and run
 `motus --state-dir PATH doctor`. Motus validates an isolated copy of the exact
 ledger schema before opening the source writable or changing its journal mode.
 

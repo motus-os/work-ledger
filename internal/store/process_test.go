@@ -45,9 +45,16 @@ func TestStoreHelperProcess(t *testing.T) {
 	}
 	if mode == "unknown-delete-hot-crash" {
 		marker := os.Args[separator+4]
-		if err := holdUnknownDeleteStoreWithHotJournal(stateDir, marker); err != nil {
+		if err := holdInvalidDeleteStoreWithHotJournal(stateDir, marker, 0); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(84)
+		}
+	}
+	if mode == "identified-invalid-delete-hot-crash" {
+		marker := os.Args[separator+4]
+		if err := holdInvalidDeleteStoreWithHotJournal(stateDir, marker, motusApplicationID); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(81)
 		}
 	}
 	if mode == "wal-crash" {
@@ -83,16 +90,26 @@ func TestStoreHelperProcess(t *testing.T) {
 	}
 	ledger, err := Open(context.Background(), stateDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		writeStoreHelperError(err)
 		os.Exit(97)
 	}
-	if mode == "unmarked-delete-hot-crash" {
+	if mode == "legacy-delete-hot-crash" {
+		var journalMode string
+		if err := ledger.db.QueryRow(`PRAGMA journal_mode = DELETE`).Scan(&journalMode); err != nil ||
+			!strings.EqualFold(journalMode, "delete") {
+			fmt.Fprintf(os.Stderr, "set legacy DELETE journal mode: mode=%q error=%v\n", journalMode, err)
+			os.Exit(82)
+		}
+	}
+	if mode == "unmarked-rollback-hot-crash" {
 		if _, err := ledger.db.Exec(`PRAGMA application_id = 0`); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(83)
 		}
 	}
-	if mode == "delete-hot-crash" || mode == "unmarked-delete-hot-crash" {
+	if mode == "rollback-hot-crash" ||
+		mode == "legacy-delete-hot-crash" ||
+		mode == "unmarked-rollback-hot-crash" {
 		if _, err := ledger.db.Exec(`PRAGMA cache_size = 1`); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(88)
@@ -157,7 +174,7 @@ func TestStoreHelperProcess(t *testing.T) {
 			})
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			writeStoreHelperError(err)
 			os.Exit(93)
 		}
 	}
@@ -213,7 +230,7 @@ func holdInvalidWALStore(stateDir, marker string) error {
 	}
 }
 
-func holdUnknownDeleteStoreWithHotJournal(stateDir, marker string) error {
+func holdInvalidDeleteStoreWithHotJournal(stateDir, marker string, applicationID uint32) error {
 	database, err := createPrivateRawDatabase(stateDir)
 	if err != nil {
 		return err
@@ -233,6 +250,11 @@ func holdUnknownDeleteStoreWithHotJournal(stateDir, marker string) error {
 	}
 	if _, err := db.Exec(`PRAGMA user_version = 777`); err != nil {
 		return err
+	}
+	if applicationID != 0 {
+		if _, err := db.Exec(`PRAGMA application_id = ` + strconv.FormatUint(uint64(applicationID), 10)); err != nil {
+			return err
+		}
 	}
 	if _, err := db.Exec(`PRAGMA cache_size = 1`); err != nil {
 		return err
@@ -322,6 +344,18 @@ func storeHelperCommand(t *testing.T, arguments ...string) *exec.Cmd {
 	command := exec.Command(executable, commandArguments...)
 	command.Env = append(os.Environ(), "MOTUS_STORE_HELPER=1")
 	return command
+}
+
+func writeStoreHelperError(err error) {
+	fmt.Fprintln(os.Stderr, err)
+	var code sqlite3.ExtendedErrorCode
+	if errors.As(err, &code) {
+		fmt.Fprintf(os.Stderr, "sqlite_code=%d sqlite_extended_code=%d\n", code.Code(), code)
+	}
+	var detail *sqlite3.Error
+	if errors.As(err, &detail) && detail.Unwrap() != nil {
+		fmt.Fprintf(os.Stderr, "sqlite_system_error=%v\n", detail.Unwrap())
+	}
 }
 
 func TestMultipleProcessesWriteWithoutGaps(t *testing.T) {
@@ -482,11 +516,20 @@ func TestWALMigrationRecoversCommittedDataAfterAbruptTermination(t *testing.T) {
 }
 
 func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
+	for _, mode := range []string{"rollback-hot-crash", "legacy-delete-hot-crash"} {
+		t.Run(mode, func(t *testing.T) {
+			testOpenForReadRecoversHotRollbackJournal(t, mode)
+		})
+	}
+}
+
+func testOpenForReadRecoversHotRollbackJournal(t *testing.T, mode string) {
+	t.Helper()
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	database := filepath.Join(stateDir, DatabaseFilename)
-	marker := filepath.Join(root, "delete-hot-ready")
-	command := storeHelperCommand(t, "delete-hot-crash", stateDir, "one", marker)
+	marker := filepath.Join(root, "rollback-hot-ready")
+	command := storeHelperCommand(t, mode, stateDir, "one", marker)
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
@@ -500,7 +543,7 @@ func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			_ = command.Process.Kill()
-			t.Fatalf("DELETE helper did not become ready: %s", output.Bytes())
+			t.Fatalf("rollback helper did not become ready: %s", output.Bytes())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -526,17 +569,23 @@ func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
 		if err := os.Chmod(database, 0o400); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(journal, 0o400); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Chmod(stateDir, 0o500); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := OpenForRead(context.Background(), stateDir); !errors.Is(err, errRollbackRecoveryRequired) ||
-			!strings.Contains(err.Error(), "make the directory and database writable") {
+			!strings.Contains(err.Error(), "make the directory and its files writable") {
 			t.Fatalf("OpenForRead(non-writable hot journal) error = %v", err)
 		}
 		if err := os.Chmod(stateDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(database, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(journal, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -555,8 +604,8 @@ func TestOpenForReadRecoversHotRollbackJournal(t *testing.T) {
 		crashProbe != 0 {
 		t.Fatalf("uncommitted crash table survived recovery = %d, %v", crashProbe, err)
 	}
-	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rollback journal after recovery: %v", err)
+	if hot, err := hasRollbackJournal(database); err != nil || hot {
+		t.Fatalf("hot rollback journal after recovery = %t, %v", hot, err)
 	}
 }
 
@@ -711,39 +760,56 @@ func TestInvalidUncheckpointedWALIsRejectedWithoutSourceMutation(t *testing.T) {
 	}
 }
 
-func TestUnknownHotRollbackJournalIsRejectedWithoutSourceMutation(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, "state")
-	database := filepath.Join(stateDir, DatabaseFilename)
-	journal := database + "-journal"
-	crashStoreHelper(t, "unknown-delete-hot-crash", stateDir, filepath.Join(root, "ready"))
-	if info, err := os.Stat(journal); err != nil || info.Size() == 0 {
-		t.Fatalf("unknown hot rollback journal = %#v, %v", info, err)
-	}
-	header, err := inspectSQLiteHeader(database)
-	if err != nil || !header.valid || header.applicationID != 0 {
-		t.Fatalf("unknown hot database header = %#v, %v", header, err)
-	}
-	before := captureStateDirectory(t, stateDir)
-
-	openers := []struct {
-		name string
-		open func(context.Context, string) (*Store, error)
+func TestInvalidHotRollbackJournalIsRejectedWithoutSourceMutation(t *testing.T) {
+	cases := []struct {
+		name          string
+		helperMode    string
+		applicationID uint32
 	}{
-		{name: "OpenForRead", open: OpenForRead},
-		{name: "Open", open: Open},
+		{name: "unknown", helperMode: "unknown-delete-hot-crash"},
+		{
+			name:          "Motus-identified",
+			helperMode:    "identified-invalid-delete-hot-crash",
+			applicationID: motusApplicationID,
+		},
 	}
-	for _, opener := range openers {
-		t.Run(opener.name, func(t *testing.T) {
-			ledger, err := opener.open(context.Background(), stateDir)
-			if ledger != nil {
-				_ = ledger.Close()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			stateDir := filepath.Join(root, "state")
+			database := filepath.Join(stateDir, DatabaseFilename)
+			journal := database + "-journal"
+			crashStoreHelper(t, testCase.helperMode, stateDir, filepath.Join(root, "ready"))
+			if info, err := os.Stat(journal); err != nil || info.Size() == 0 {
+				t.Fatalf("invalid hot rollback journal = %#v, %v", info, err)
 			}
-			if !errors.Is(err, ErrInvalidSchema) {
-				t.Fatalf("%s(unknown hot rollback journal) error = %v, want ErrInvalidSchema",
-					opener.name, err)
+			header, err := inspectSQLiteHeader(database)
+			if err != nil || !header.valid || header.applicationID != testCase.applicationID {
+				t.Fatalf("invalid hot database header = %#v, %v; want application_id=%d",
+					header, err, testCase.applicationID)
 			}
-			assertStateDirectoryUnchanged(t, stateDir, before)
+			before := captureStateDirectory(t, stateDir)
+
+			openers := []struct {
+				name string
+				open func(context.Context, string) (*Store, error)
+			}{
+				{name: "OpenForRead", open: OpenForRead},
+				{name: "Open", open: Open},
+			}
+			for _, opener := range openers {
+				t.Run(opener.name, func(t *testing.T) {
+					ledger, err := opener.open(context.Background(), stateDir)
+					if ledger != nil {
+						_ = ledger.Close()
+					}
+					if !errors.Is(err, ErrInvalidSchema) {
+						t.Fatalf("%s(invalid hot rollback journal) error = %v, want ErrInvalidSchema",
+							opener.name, err)
+					}
+					assertStateDirectoryUnchanged(t, stateDir, before)
+				})
+			}
 		})
 	}
 }
@@ -762,7 +828,7 @@ func TestUnmarkedHotRollbackJournalRecoversAfterIsolatedValidation(t *testing.T)
 			stateDir := filepath.Join(root, "state")
 			database := filepath.Join(stateDir, DatabaseFilename)
 			journal := database + "-journal"
-			crashStoreHelper(t, "unmarked-delete-hot-crash", stateDir, filepath.Join(root, "ready"))
+			crashStoreHelper(t, "unmarked-rollback-hot-crash", stateDir, filepath.Join(root, "ready"))
 			header, err := inspectSQLiteHeader(database)
 			if err != nil || !header.valid || header.applicationID != 0 {
 				t.Fatalf("unmarked hot database header = %#v, %v", header, err)
@@ -787,8 +853,8 @@ func TestUnmarkedHotRollbackJournalRecoversAfterIsolatedValidation(t *testing.T)
 			if err != nil || !recognized {
 				t.Fatalf("recovered ledger identity = %t, %v", recognized, err)
 			}
-			if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("rollback journal after recovery: %v", err)
+			if hot, err := hasRollbackJournal(database); err != nil || hot {
+				t.Fatalf("hot rollback journal after recovery = %t, %v", hot, err)
 			}
 		})
 	}

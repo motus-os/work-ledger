@@ -16,6 +16,11 @@ import (
 
 var errLedgerChangedDuringValidation = errors.New("store: ledger changed during validation")
 
+// A first initializer or active writer can change the journal while another
+// process is taking an isolated validation copy. Allow a bounded window for a
+// stable snapshot or clean journal without ever opening an unvalidated source.
+const rollbackValidationRetries = 20
+
 type validationFile struct {
 	source      string
 	destination string
@@ -25,8 +30,13 @@ type validationFile struct {
 }
 
 func hasRollbackJournal(database string) (bool, error) {
-	_, exists, err := inspectRegularStateFile(database+"-journal", "rollback journal")
-	return exists, err
+	info, exists, err := inspectRegularStateFile(database+"-journal", "rollback journal")
+	if err != nil || !exists {
+		return false, err
+	}
+	// TRUNCATE mode leaves a safe, zero-length journal after a clean commit.
+	// A non-empty journal may be hot and requires the recovery path.
+	return info.Size() > 0, nil
 }
 
 func inspectRegularStateFile(path, kind string) (os.FileInfo, bool, error) {
@@ -185,12 +195,12 @@ func validateWALSnapshot(ctx context.Context, stateDir, database string) error {
 
 func validateRollbackSnapshot(ctx context.Context, stateDir, database string) error {
 	var err error
-	for attempt := 0; attempt <= defaultBusyRetries; attempt++ {
-		_, exists, inspectErr := inspectRegularStateFile(database+"-journal", "rollback journal")
+	for attempt := 0; attempt <= rollbackValidationRetries; attempt++ {
+		info, exists, inspectErr := inspectRegularStateFile(database+"-journal", "rollback journal")
 		if inspectErr != nil {
 			return inspectErr
 		}
-		if !exists {
+		if !exists || info.Size() == 0 {
 			return nil
 		}
 		err = validateLedgerSnapshot(ctx, stateDir, database, "-journal", "rollback journal", true,
@@ -198,7 +208,7 @@ func validateRollbackSnapshot(ctx context.Context, stateDir, database string) er
 		if !errors.Is(err, errLedgerChangedDuringValidation) {
 			return err
 		}
-		if attempt == defaultBusyRetries {
+		if attempt == rollbackValidationRetries {
 			break
 		}
 		if sleepErr := sleepContext(ctx, retryDelay(attempt)); sleepErr != nil {
@@ -458,10 +468,10 @@ func migrateWALJournal(ctx context.Context, stateDir, database string) (returnEr
 		}
 
 		var journalMode string
-		if err := db.QueryRowContext(ctx, `PRAGMA journal_mode = DELETE`).Scan(&journalMode); err != nil {
+		if err := db.QueryRowContext(ctx, `PRAGMA journal_mode = TRUNCATE`).Scan(&journalMode); err != nil {
 			return fmt.Errorf("change validated ledger from WAL to rollback journal: %w", err)
 		}
-		if !strings.EqualFold(journalMode, "delete") {
+		if !strings.EqualFold(journalMode, "truncate") {
 			return fmt.Errorf("change validated ledger from WAL to rollback journal: SQLite retained %q; stop every Motus process using this state directory and retry",
 				journalMode)
 		}

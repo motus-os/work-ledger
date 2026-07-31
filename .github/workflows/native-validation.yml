@@ -32,6 +32,9 @@ jobs:
         with:
           go-version: 1.26.5
           cache: true
+      - name: Stress concurrent ledger writers
+        if: matrix.os == 'windows-2025'
+        run: go test ./internal/store -run '^TestMultipleProcessesWriteWithoutGaps$' -count=50
       - name: Test
         run: go test ./...
       - name: Vet

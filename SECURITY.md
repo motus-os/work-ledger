@@ -61,19 +61,20 @@ paths and `--query` search terms remain visible as command-line values. These
 controls reduce accidental exposure and unsafe terminal rendering; they do not
 make submitted content non-sensitive.
 
-SQLite may temporarily create `ledger.db-journal` beside `ledger.db` during a
-write. Back up, move, or remove the entire state directory as one unit while no
-Motus process is using it. Copies and backups remain readable to anyone who
-can access them. If a process dies during a write, SQLite requires write access
-to roll back a hot journal before the ledger can be opened read-only again.
+SQLite creates `ledger.db-journal` beside `ledger.db` during a write and may
+retain it as a zero-length file after a clean close. Back up, move, or remove
+the entire state directory as one unit while no Motus process is using it.
+Copies and backups remain readable to anyone who can access them. If a process
+dies during a write, SQLite requires write access to roll back a non-empty
+journal before the ledger can be opened read-only again.
 
 Ledgers last opened by versions through v0.1.4 use WAL mode. A current Motus
 binary needs a writable open to migrate such a ledger before read commands can
 use it from a non-writable directory. Stop every Motus process using the
-ledger, make the directory and database writable, run
+ledger, make the state directory and its files writable, run
 `motus --state-dir PATH doctor`, and then restore the intended read-only
 permissions. Motus validates an isolated copy of the exact ledger schema before
-opening the source writable or changing its persistent journal mode.
+opening the source writable or changing it out of WAL mode.
 
 Do not use v0.1.4 or older on that ledger after migration. Those versions
 re-enable WAL on a writable open. If that happens, stop every Motus process and

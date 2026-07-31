@@ -79,11 +79,11 @@ func OpenForRead(ctx context.Context, stateDir string) (*Store, error) {
 			if errors.Is(err, errJournalMigrationRequired) {
 				return nil, err
 			}
-			return nil, fmt.Errorf("%w: the ledger uses WAL and needs exclusive writable access; stop every Motus process using this state directory, make the directory and database writable, then retry: %w",
+			return nil, fmt.Errorf("%w: the ledger uses WAL and needs exclusive writable access; stop every Motus process using this state directory, make the directory and its files writable, then retry: %w",
 				errJournalMigrationRequired, err)
 		}
 		if rollbackRecovery {
-			return nil, fmt.Errorf("%w: an interrupted write left a rollback journal; stop every Motus process using this state directory, make the directory and database writable, then retry: %w",
+			return nil, fmt.Errorf("%w: an interrupted write left a rollback journal; stop every Motus process using this state directory, make the directory and its files writable, then retry: %w",
 				errRollbackRecoveryRequired, err)
 		}
 		return nil, fmt.Errorf("migrate ledger: %w", err)
@@ -134,7 +134,7 @@ func open(ctx context.Context, stateDir string, readOnly, existingOnly bool) (*S
 			if errors.Is(err, ErrInvalidSchema) {
 				return nil, err
 			}
-			return nil, fmt.Errorf("%w: the ledger uses WAL and needs exclusive writable access; stop every Motus process using this state directory, make the directory and database writable, then retry: %w",
+			return nil, fmt.Errorf("%w: the ledger uses WAL and needs exclusive writable access; stop every Motus process using this state directory, make the directory and its files writable, then retry: %w",
 				errJournalMigrationRequired, err)
 		}
 	}
@@ -193,7 +193,10 @@ func (s *Store) Close() error {
 func sqliteDSN(database string, readOnly bool, busyTimeout time.Duration) string {
 	journalMode := ""
 	if !readOnly {
-		journalMode = "DELETE"
+		// TRUNCATE preserves rollback-journal durability without deleting the
+		// journal at every commit. Non-WAL modes are connection-scoped, so each
+		// writable connection must request it.
+		journalMode = "TRUNCATE"
 	}
 	return sqliteDSNWithJournalMode(database, readOnly, busyTimeout, journalMode)
 }
@@ -456,7 +459,13 @@ func (s *Store) pingWithRetry(ctx context.Context) error {
 }
 
 func (s *Store) verifyPragmas(ctx context.Context) error {
-	return s.verifyPragmasForJournal(ctx, "delete")
+	expectedJournalMode := "truncate"
+	if s.readOnly {
+		// Only WAL mode persists in the database header. A read-only reopen of
+		// a rollback-journal database therefore reports SQLite's DELETE default.
+		expectedJournalMode = "delete"
+	}
+	return s.verifyPragmasForJournal(ctx, expectedJournalMode)
 }
 
 func (s *Store) verifyPragmasForJournal(ctx context.Context, expectedJournalMode string) error {

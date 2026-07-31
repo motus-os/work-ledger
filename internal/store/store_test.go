@@ -20,7 +20,7 @@ import (
 
 var testEpoch = time.Date(2026, 7, 21, 12, 0, 0, 123456789, time.UTC)
 
-func TestSQLiteDSNInstallsBusyTimeoutBeforeJournalMode(t *testing.T) {
+func TestSQLiteDSNInstallsBusyTimeoutBeforeTruncateJournalMode(t *testing.T) {
 	dsn := sqliteDSN(filepath.Join(t.TempDir(), DatabaseFilename), false, defaultBusyTimeout)
 	parsed, err := url.Parse(dsn)
 	if err != nil {
@@ -33,7 +33,7 @@ func TestSQLiteDSNInstallsBusyTimeoutBeforeJournalMode(t *testing.T) {
 	if got, want := pragmas[0], "busy_timeout("+strconv.FormatInt(defaultBusyTimeout.Milliseconds(), 10)+")"; got != want {
 		t.Fatalf("first pragma = %q, want %q", got, want)
 	}
-	if got, want := pragmas[1], "journal_mode(DELETE)"; got != want {
+	if got, want := pragmas[1], "journal_mode(TRUNCATE)"; got != want {
 		t.Fatalf("second pragma = %q, want %q", got, want)
 	}
 }
@@ -351,12 +351,22 @@ func TestOpenReadOnlyWorksWithNonWritableState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var writableJournalMode string
+	if err := writable.db.QueryRow(`PRAGMA journal_mode`).Scan(&writableJournalMode); err != nil ||
+		!strings.EqualFold(writableJournalMode, "truncate") {
+		t.Fatalf("writable journal mode = %q, %v", writableJournalMode, err)
+	}
 	receiptBefore, err := writable.ProjectReceipt(ctx, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := writable.Close(); err != nil {
 		t.Fatal(err)
+	}
+	journal := database + "-journal"
+	journalInfo, err := os.Lstat(journal)
+	if err != nil || !journalInfo.Mode().IsRegular() || journalInfo.Size() != 0 {
+		t.Fatalf("clean TRUNCATE journal = %#v, %v", journalInfo, err)
 	}
 	contentsBefore, err := os.ReadFile(database)
 	if err != nil {
@@ -373,12 +383,16 @@ func TestOpenReadOnlyWorksWithNonWritableState(t *testing.T) {
 	if err := os.Chmod(database, 0o400); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(journal, 0o400); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(stateDir, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = os.Chmod(stateDir, 0o700)
 		_ = os.Chmod(database, 0o600)
+		_ = os.Chmod(journal, 0o600)
 	})
 
 	for name, opener := range map[string]func(context.Context, string) (*Store, error){
@@ -436,6 +450,50 @@ func TestOpenReadOnlyWorksWithNonWritableState(t *testing.T) {
 	}
 	if got, want := directoryEntryNames(entriesAfter), directoryEntryNames(entriesBefore); !slices.Equal(got, want) {
 		t.Fatalf("state files after read-only opens = %q, want %q", got, want)
+	}
+}
+
+func TestOpenRejectsEmptyRollbackJournalSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires additional privileges on Windows")
+	}
+	ctx := context.Background()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	database := filepath.Join(stateDir, DatabaseFilename)
+	ledger, err := Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	journal := database + "-journal"
+	if err := os.Remove(journal); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, journal); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, opener := range map[string]func(context.Context, string) (*Store, error){
+		"Open":         Open,
+		"OpenForRead":  OpenForRead,
+		"OpenReadOnly": OpenReadOnly,
+	} {
+		t.Run(name, func(t *testing.T) {
+			opened, err := opener(ctx, stateDir)
+			if opened != nil {
+				_ = opened.Close()
+			}
+			if !errors.Is(err, ErrUnsafeStatePath) {
+				t.Fatalf("%s(empty rollback journal symlink) error = %v, want ErrUnsafeStatePath",
+					name, err)
+			}
+		})
 	}
 }
 
@@ -553,7 +611,7 @@ func TestWALMigrationCommitsIdentityBeforeReturning(t *testing.T) {
 	if err != nil || !header.valid ||
 		header.writeVersion != 2 || header.readVersion != 2 ||
 		header.applicationID != motusApplicationID {
-		t.Fatalf("header before WAL-to-DELETE transition = %#v, %v", header, err)
+		t.Fatalf("header before WAL-to-rollback transition = %#v, %v", header, err)
 	}
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
