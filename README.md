@@ -1,27 +1,24 @@
 # Motus Work Ledger
 
-**Command history tells you what ran. Motus keeps what the run taught you.**
+**A work ledger for AI-assisted engineering.**
 
-Run an existing test, build, or script through Motus. It records selected facts
-about the run. When the run reveals something worth reusing, add a concise
-finding: an explanation, constraint, workaround, decision, or next step.
-Later, search the local ledger and get the finding plus its recorded run ID
-before repeating the work.
+Motus connects the reason behind a fix or decision to the run and Git state
+that informed it. Later, a developer or coding agent can find that context
+before similar work.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/motus-workflow-mobile.svg">
-  <img src="docs/motus-workflow.svg" alt="During current work, Motus records selected run facts and links them to context added by a developer or agent. During later work, a search returns the finding and recorded run ID.">
+  <img src="docs/motus-workflow.svg" alt="A developer or agent records a command run and adds a finding. Motus links both in a local ledger. A later search returns the finding and origin run before similar work.">
 </picture>
 
-A **run** records selected machine facts such as the repository, commit, and
-outcome. A **finding** holds the explanation, constraint, workaround, decision,
-or next step worth keeping. A developer or coding agent chooses what to add;
-Motus does not infer a lesson from command output.
+A **run** records selected machine facts such as the repository, commit,
+outcome, and time. A **finding** holds the explanation, constraint, workaround,
+decision, or next step worth keeping. A developer or agent decides what
+deserves a finding. The same CLI also works from CI.
 
-Motus is one local CLI. It runs on demand, stores no argument values or raw
-command output, and requires no account, server, or vendor integration. Scripts
-and CI can invoke the same commands explicitly, but Motus does not coordinate
-their workflows or move their state.
+Keep standing rules in project documentation. Use Motus when the source run and
+its recorded Git state, outcome, or resolution will matter later. The ledger is
+local by default.
 
 ## Install
 
@@ -204,15 +201,15 @@ Use the smallest durable home that fits the information:
 | A ticket or external decision whose owning system already provides the needed context | The system that owns it |
 | An external decision that changes specific technical work | Its owning system, plus a concise Motus finding when the implementation or validation run matters |
 
-Motus is not a replacement for project documentation or an external system of
-record. It preserves selected run-linked context for later work.
+Project documentation remains the home for standing rules, and external
+systems remain authoritative for their records. Motus preserves the selected
+context whose source run matters.
 
 ## Use Motus with coding agents and CI
 
-The main workflow is deliberate: a developer or coding agent chooses the
-command, decides whether it produced a reusable finding, and searches when an
-earlier finding may help. Call Motus from the workflow that already runs the
-command.
+A developer or coding agent decides which command to record, which finding to
+keep, and when to search. Put the Motus calls in the workflow that already runs
+the command.
 
 Add guidance like this to the project's `AGENTS.md` or equivalent:
 
@@ -227,11 +224,10 @@ Add guidance like this to the project's `AGENTS.md` or equivalent:
 - Resolve a finding only with a successful recorded run that addresses it.
 ```
 
-The caller decides what deserves a durable record. CI can wrap a command and
-preserve the resulting ledger when its selected run facts will be useful later.
-Pass an explicit state directory and archive the whole directory while no Motus
-process is using it. Using `-C` keeps an absolute state path from being
-re-created beneath the extraction directory:
+CI can wrap a command and preserve the resulting ledger when its selected run
+facts will be useful later. Pass an explicit state directory and archive the
+whole directory while no Motus process is using it. Using `-C` keeps an absolute
+state path from being re-created beneath the extraction directory:
 
 ```console
 $ STATE_DIR="${MOTUS_STATE_DIR:-.motus}"

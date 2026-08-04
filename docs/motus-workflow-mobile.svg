@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280" role="img" aria-labelledby="title desc">
   <title id="title">How Motus works</title>
-  <desc id="desc">A command runs through Motus and a developer or agent adds a finding. Motus links the finding to the run in a local ledger. A later search returns the finding and recorded run ID before similar work.</desc>
+  <desc id="desc">A developer or agent records a command run and adds a finding. Motus links both in a local ledger. A later search returns the finding and origin run before similar work.</desc>
   <rect width="720" height="1280" fill="#f7f8fa"/>
   <g font-family="Arial, Helvetica, sans-serif" fill="#101217">
     <text x="48" y="62" font-size="28" font-weight="700">How Motus works</text>
@@ -20,9 +20,9 @@
     </g>
     <text x="388" y="272" font-size="18" font-weight="700">Finding added</text>
 
-    <text x="48" y="348" font-size="23" font-weight="700">Run the command through Motus</text>
-    <text x="48" y="384" fill="#303642" font-size="19">Run: repository · commit · outcome</text>
-    <text x="48" y="416" fill="#303642" font-size="19">Finding: explanation · constraint · decision · next step</text>
+    <text x="48" y="348" font-size="23" font-weight="700">Record the run</text>
+    <text x="48" y="384" fill="#303642" font-size="19">Test · build · script · check</text>
+    <text x="48" y="416" fill="#303642" font-size="19">Repository · commit · outcome · time</text>
 
     <path d="M360 446v46m-9-10 9 10 9-10" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
 
@@ -40,10 +40,10 @@
     <text x="124" y="662" font-size="16" font-weight="700" letter-spacing="1.2">RUN</text>
     <text x="250" y="662" fill="#606978" font-size="17">repo · commit · outcome</text>
     <text x="124" y="701" font-size="16" font-weight="700" letter-spacing="1.2">FINDING</text>
-    <text x="250" y="701" fill="#606978" font-size="17">context for later work</text>
+    <text x="250" y="701" fill="#606978" font-size="17">authored technical context</text>
 
-    <text x="48" y="790" font-size="23" font-weight="700">Motus links the finding to the run</text>
-    <text x="48" y="826" fill="#303642" font-size="19">Both stay in one local, searchable ledger.</text>
+    <text x="48" y="790" font-size="23" font-weight="700">Link the finding</text>
+    <text x="48" y="826" fill="#303642" font-size="19">The context stays with its source run.</text>
 
     <path d="M360 852v46m-9-10 9 10 9-10" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
 
@@ -62,10 +62,10 @@
     <line x1="204" y1="1072" x2="204" y2="1148" stroke="#2456e6" stroke-width="4"/>
     <text x="228" y="1095" font-size="18" font-weight="700">Finding</text>
     <line x1="228" y1="1111" x2="612" y2="1111" stroke="#c7d3f6" stroke-width="1.5"/>
-    <text x="228" y="1140" font-size="18" font-weight="700">Recorded run ID</text>
+    <text x="228" y="1140" font-size="18" font-weight="700">Origin run</text>
 
-    <text x="48" y="1200" font-size="23" font-weight="700">Search before similar work</text>
-    <text x="48" y="1236" fill="#303642" font-size="19">Motus returns the finding and recorded run ID</text>
-    <text x="48" y="1266" fill="#303642" font-size="19">before the next action.</text>
+    <text x="48" y="1200" font-size="23" font-weight="700">Retrieve before acting</text>
+    <text x="48" y="1236" fill="#303642" font-size="19">Search returns the finding and origin run</text>
+    <text x="48" y="1266" fill="#303642" font-size="19">before similar work begins.</text>
   </g>
 </svg>
