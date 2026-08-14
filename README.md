@@ -5,7 +5,7 @@ them to findings a person or agent chooses to keep. Developers, coding agents,
 and CI jobs can search the same ledger when related work comes up again.
 
 <picture>
-  <source media="(max-width: 640px)" srcset="docs/motus-workflow-mobile.svg">
+  <source media="(max-width: 900px)" srcset="docs/motus-workflow-mobile.svg">
   <img src="docs/motus-workflow.svg" alt="A developer, agent, or CI job records a command run. A person or agent adds a finding linked to it. A later search returns the finding and its source run.">
 </picture>
 
