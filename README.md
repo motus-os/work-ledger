@@ -1,24 +1,25 @@
 # Motus Work Ledger
 
-**A work ledger for AI-assisted engineering.**
-
-Motus connects the reason behind a fix or decision to the run and Git state
-that informed it. Later, a developer or coding agent can find that context
-before similar work.
+Motus is a local CLI that records selected facts about command runs and links
+them to findings a person or agent chooses to keep. Developers, coding agents,
+and CI jobs can search the same ledger when related work comes up again.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/motus-workflow-mobile.svg">
-  <img src="docs/motus-workflow.svg" alt="A developer or agent records a command run and adds a finding. Motus links both in a local ledger. A later search returns the finding and origin run before similar work.">
+  <img src="docs/motus-workflow.svg" alt="A developer, agent, or CI job records a command run. A person or agent adds a finding linked to it. A later search returns the finding and its source run.">
 </picture>
 
 A **run** records selected machine facts such as the repository, commit,
 outcome, and time. A **finding** holds the explanation, constraint, workaround,
-decision, or next step worth keeping. A developer or agent decides what
-deserves a finding. The same CLI also works from CI.
+decision, or next step worth keeping.
 
 Keep standing rules in project documentation. Use Motus when the source run and
 its recorded Git state, outcome, or resolution will matter later. The ledger is
 local by default.
+
+The current CLI records local technical runs and findings. The
+[broader work-ledger model](https://www.motussupra.com/vision.html) shows the
+proposed direction across teams and organizations.
 
 ## Install
 
@@ -178,7 +179,7 @@ A failed command shows the complete lifecycle, but a finding can be attached
 to any closed run that gives it useful context. Use a finding to preserve a
 run-specific constraint, workaround, decision, or next step.
 
-![A finding links authored context to an origin run. A caller can append either a resolved closure linked to a successful run or a dismissed closure with a note. The original finding remains unchanged.](docs/finding-lifecycle.svg)
+![A finding stays linked to its origin run. It remains open until one closure either resolves it with a successful run or dismisses it with a note. The original finding does not change.](docs/finding-lifecycle.svg)
 
 The current fields are deliberately small:
 
