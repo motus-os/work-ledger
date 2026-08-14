@@ -1,71 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="820" viewBox="0 0 360 820" role="img" aria-labelledby="title desc">
   <title id="title">How Motus works</title>
-  <desc id="desc">A developer or agent records a command run and adds a finding. Motus links both in a local ledger. A later search returns the finding and origin run before similar work.</desc>
-  <rect width="720" height="1280" fill="#f7f8fa"/>
-  <g font-family="Arial, Helvetica, sans-serif" fill="#101217">
-    <text x="48" y="62" font-size="28" font-weight="700">How Motus works</text>
-    <line x1="48" y1="92" x2="672" y2="92" stroke="#dce1e8" stroke-width="2"/>
+  <desc id="desc">First, a developer, agent, or CI job records a command run. Next, a person or agent adds a finding linked to that run. Later, a search returns the finding with its source run.</desc>
+  <style>
+    .sans { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+    .title { fill: #101217; font-size: 24px; font-weight: 700; letter-spacing: -0.35px; }
+    .step { fill: #2456e6; font-size: 13px; font-weight: 700; letter-spacing: 1.2px; }
+    .heading { fill: #101217; font-size: 20px; font-weight: 700; letter-spacing: -0.2px; }
+    .body { fill: #303642; font-size: 15.5px; }
+    .card-title { fill: #101217; font-size: 16px; font-weight: 700; }
+    .card-meta { fill: #606978; font-size: 13px; }
+    .terminal-command { fill: #e8edf6; font-size: 12.5px; }
+    .terminal-title { fill: #e8edf6; font-size: 15px; font-weight: 700; }
+    .terminal-meta { fill: #b9c4d6; font-size: 12.5px; }
+  </style>
 
-    <text x="48" y="135" fill="#606978" font-size="18" font-weight="700" letter-spacing="1.7">NOW</text>
-    <rect x="48" y="162" width="500" height="94" rx="10" fill="#0d1119" stroke="#263044" stroke-width="2"/>
-    <g transform="translate(70 183)" fill="none" stroke="#8da8ff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2">
-      <rect width="28" height="26" rx="3"/>
-      <path d="m7 7 3.5 3.5L7 14M15 17h6"/>
-    </g>
-    <text x="116" y="207" fill="#e8edf6" font-family="SFMono-Regular, Consolas, monospace" font-size="18">$ your command</text>
-    <rect x="326" y="226" width="312" height="78" rx="9" fill="#ffffff" stroke="#c7d3f6" stroke-width="2"/>
-    <g transform="translate(348 247)" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-      <path d="M1 0h14l4 4v24H1z"/>
-      <path d="M15 0v4h4M6 11h8M6 16h7M6 21h5"/>
-    </g>
-    <text x="388" y="272" font-size="18" font-weight="700">Finding added</text>
+  <rect width="360" height="820" fill="#f7f8fa"/>
+  <text class="sans title" x="24" y="40">How Motus works</text>
+  <path d="M24 64H336" fill="none" stroke="#dce1e8" stroke-width="1.5"/>
 
-    <text x="48" y="348" font-size="23" font-weight="700">Record the run</text>
-    <text x="48" y="384" fill="#303642" font-size="19">Test · build · script · check</text>
-    <text x="48" y="416" fill="#303642" font-size="19">Repository · commit · outcome · time</text>
-
-    <path d="M360 446v46m-9-10 9 10 9-10" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
-
-    <text x="48" y="538" fill="#606978" font-size="18" font-weight="700" letter-spacing="1.7">LOCAL LEDGER</text>
-    <rect x="86" y="574" width="564" height="174" rx="12" fill="#edf2ff" stroke="#d4dcf5" stroke-width="2"/>
-    <rect x="76" y="564" width="564" height="174" rx="12" fill="#ffffff" stroke="#b9c8f5" stroke-width="2"/>
-    <g transform="translate(100 587)">
-      <rect width="34" height="34" rx="7" fill="#2456e6"/>
-      <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="2.2">
-        <path d="M8 10h4M16 10h10M8 17h4M16 17h10M8 24h4M16 24h10"/>
-      </g>
-    </g>
-    <text x="150" y="613" font-size="19" font-weight="700">Motus</text>
-    <line x1="102" y1="640" x2="102" y2="712" stroke="#2456e6" stroke-width="3"/>
-    <text x="124" y="662" font-size="16" font-weight="700" letter-spacing="1.2">RUN</text>
-    <text x="250" y="662" fill="#606978" font-size="17">repo · commit · outcome</text>
-    <text x="124" y="701" font-size="16" font-weight="700" letter-spacing="1.2">FINDING</text>
-    <text x="250" y="701" fill="#606978" font-size="17">authored technical context</text>
-
-    <text x="48" y="790" font-size="23" font-weight="700">Link the finding</text>
-    <text x="48" y="826" fill="#303642" font-size="19">The context stays with its source run.</text>
-
-    <path d="M360 852v46m-9-10 9 10 9-10" fill="none" stroke="#2456e6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
-
-    <text x="48" y="944" fill="#606978" font-size="18" font-weight="700" letter-spacing="1.7">LATER</text>
-    <rect x="76" y="972" width="564" height="64" rx="9" fill="#0d1119" stroke="#27334a" stroke-width="2"/>
-    <g transform="translate(100 990)" fill="none" stroke="#8da8ff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2">
-      <rect x="0" y="0" width="28" height="26" rx="3"/>
-      <path d="m7 7 3.5 3.5L7 14M15 17h6"/>
-    </g>
-    <text x="146" y="1014" fill="#e7ebf3" font-family="SFMono-Regular, Consolas, monospace" font-size="18">motus finding list --query term</text>
-    <g transform="translate(586 991)" fill="none" stroke="#b9c4d6" stroke-linecap="round" stroke-width="2.2">
-      <circle cx="12" cy="12" r="8"/>
-      <path d="m18 18 7 7"/>
-    </g>
-    <rect x="204" y="1058" width="436" height="104" rx="9" fill="#edf2ff" stroke="#c7d3f6" stroke-width="2"/>
-    <line x1="204" y1="1072" x2="204" y2="1148" stroke="#2456e6" stroke-width="4"/>
-    <text x="228" y="1095" font-size="18" font-weight="700">Finding</text>
-    <line x1="228" y1="1111" x2="612" y2="1111" stroke="#c7d3f6" stroke-width="1.5"/>
-    <text x="228" y="1140" font-size="18" font-weight="700">Origin run</text>
-
-    <text x="48" y="1200" font-size="23" font-weight="700">Retrieve before acting</text>
-    <text x="48" y="1236" fill="#303642" font-size="19">Search returns the finding and origin run</text>
-    <text x="48" y="1266" fill="#303642" font-size="19">before similar work begins.</text>
+  <text class="sans step" x="24" y="92">01</text>
+  <g aria-hidden="true">
+    <rect x="24" y="106" width="312" height="92" rx="9" fill="#0d1119" stroke="#263044" stroke-width="1.5"/>
+    <path d="M24 148H336" fill="none" stroke="#263044" stroke-width="1.5"/>
+    <text class="mono terminal-command" x="40" y="133">$ motus wrap -- npm test</text>
+    <text class="sans terminal-title" x="40" y="174">Run recorded</text>
+    <text class="sans terminal-meta" x="40" y="191">repo · commit · outcome</text>
   </g>
+  <text class="sans heading" x="24" y="228">Record the run</text>
+  <text class="sans body" x="24" y="255">Motus records selected facts about</text>
+  <text class="sans body" x="24" y="277">a test, build, script, or check.</text>
+
+  <path d="M180 292V316" fill="none" stroke="#2456e6" stroke-width="2" stroke-linecap="round"/>
+  <path d="m174 310 6 6 6-6" fill="none" stroke="#2456e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text class="sans step" x="24" y="348">02</text>
+  <g aria-hidden="true">
+    <rect x="24" y="362" width="312" height="92" rx="9" fill="#edf2ff" stroke="#b9c8f5" stroke-width="1.5"/>
+    <text class="sans step" x="40" y="388">FINDING</text>
+    <text class="sans card-title" x="40" y="418">Why this result matters</text>
+    <text class="sans card-meta" x="40" y="440">explanation · decision · constraint</text>
+  </g>
+  <text class="sans heading" x="24" y="484">Add a finding</text>
+  <text class="sans body" x="24" y="511">Link the context worth keeping</text>
+  <text class="sans body" x="24" y="533">to the run that informed it.</text>
+
+  <path d="M180 548V572" fill="none" stroke="#2456e6" stroke-width="2" stroke-linecap="round"/>
+  <path d="m174 566 6 6 6-6" fill="none" stroke="#2456e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text class="sans step" x="24" y="604">03</text>
+  <g aria-hidden="true">
+    <rect x="24" y="618" width="312" height="92" rx="9" fill="#0d1119" stroke="#263044" stroke-width="1.5"/>
+    <path d="M24 660H336" fill="none" stroke="#263044" stroke-width="1.5"/>
+    <text class="mono terminal-command" x="40" y="645">$ motus finding list --query term</text>
+    <text class="sans terminal-title" x="40" y="686">Finding returned</text>
+    <text class="sans terminal-meta" x="40" y="703">with its source run</text>
+  </g>
+  <text class="sans heading" x="24" y="740">Retrieve it later</text>
+  <text class="sans body" x="24" y="767">Search the same local ledger</text>
+  <text class="sans body" x="24" y="789">before related work.</text>
 </svg>
