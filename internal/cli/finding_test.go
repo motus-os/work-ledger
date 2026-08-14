@@ -70,10 +70,10 @@ func TestFindingCLIEndToEnd(t *testing.T) {
 	}); code != 0 {
 		t.Fatalf("finding add exit = %d, stderr=%q", code, stderr.String())
 	}
-	if !strings.HasPrefix(stdout.String(), "Recorded finding_") ||
-		!strings.Contains(stdout.String(), "Summary: Retry used stale state") || stderr.Len() != 0 {
+	if stderr.Len() != 0 {
 		t.Fatalf("finding add stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
+	addOutput := stdout.String()
 
 	stdout.Reset()
 	stderr.Reset()
@@ -87,6 +87,12 @@ func TestFindingCLIEndToEnd(t *testing.T) {
 		t.Fatalf("finding list = %#v, %v; output=%q", findings, err, stdout.String())
 	}
 	findingID := findings[0].ID
+	wantAddOutput := "Recorded " + findingID + " (open)\n" +
+		"Run: " + originRunID + "\n" +
+		"Summary: Retry used stale state\n"
+	if addOutput != wantAddOutput {
+		t.Fatalf("finding add stdout=%q, want %q", addOutput, wantAddOutput)
+	}
 	if findings[0].OriginRunID != originRunID || findings[0].State != store.FindingOpen {
 		t.Fatalf("finding = %#v", findings[0])
 	}

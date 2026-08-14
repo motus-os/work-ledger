@@ -107,9 +107,6 @@ func runFindingAdd(ctx context.Context, arguments []string, stateDir string, env
 	fmt.Fprintf(&output, "Recorded %s (%s)\n", safeHumanText(finding.ID), finding.State)
 	fmt.Fprintf(&output, "Run: %s\n", safeHumanText(finding.OriginRunID))
 	fmt.Fprintf(&output, "Summary: %s\n", safeHumanText(finding.Content.Summary))
-	fmt.Fprintf(&output, "%s %s\n", nextCommandLabel(), displayCommand(
-		environment.ProgramName, "--state-dir", stateDir, "finding", "show", finding.ID,
-	))
 	return writeText(environment.Stdout, output.String(), environment.Stderr)
 }
 

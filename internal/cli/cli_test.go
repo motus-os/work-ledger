@@ -130,11 +130,8 @@ func TestWrapListReceiptDoctorEndToEnd(t *testing.T) {
 		t.Fatalf("wrap stdout = %q", stdout.String())
 	}
 	recordedRunID := recordedRunIDFromStderr(t, stderr.String())
-	wantNext := "\n" + nextCommandLabel() + " " + displayCommand(
-		"motus", "--state-dir", stateDir, "run", "receipt", recordedRunID,
-	) + "\n"
 	if !strings.HasPrefix(stderr.String(), "warning\nmotus: recorded run_") ||
-		!strings.Contains(stderr.String(), wantNext) {
+		strings.Contains(stderr.String(), "Next") {
 		t.Fatalf("wrap stderr = %q", stderr.String())
 	}
 
@@ -254,7 +251,7 @@ func TestRunListDistinguishesMissingEmptyAndNoMatch(t *testing.T) {
 	}
 }
 
-func TestWrapForwardsStdinAndPrintsAResolvableNextCommand(t *testing.T) {
+func TestWrapForwardsStdinWithoutPersistingItOrPrintingOnboardingGuidance(t *testing.T) {
 	cwd := t.TempDir()
 	stateDir := filepath.Join(cwd, "state with space")
 	var stdout, stderr bytes.Buffer
@@ -270,12 +267,9 @@ func TestWrapForwardsStdinAndPrintsAResolvableNextCommand(t *testing.T) {
 	if got := stdout.String(); got != "input stays out of the ledger\n" {
 		t.Fatalf("wrap stdout = %q", got)
 	}
-	recordedRunID := recordedRunIDFromStderr(t, stderr.String())
-	wantNext := nextCommandLabel() + " " + displayCommand(
-		environment.ProgramName, "--state-dir", stateDir, "run", "receipt", recordedRunID,
-	) + "\n"
-	if !strings.Contains(stderr.String(), wantNext) {
-		t.Fatalf("wrap next instruction = %q, want %q", stderr.String(), wantNext)
+	recordedRunIDFromStderr(t, stderr.String())
+	if strings.Contains(stderr.String(), "Next") || strings.Contains(stderr.String(), "--state-dir") {
+		t.Fatalf("successful wrap printed onboarding guidance: %q", stderr.String())
 	}
 	if err := filepath.WalkDir(stateDir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() {
@@ -291,6 +285,23 @@ func TestWrapForwardsStdinAndPrintsAResolvableNextCommand(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSuccessfulWrapOutputStaysConciseAcrossRepeatedRuns(t *testing.T) {
+	cwd := t.TempDir()
+	stateDir := filepath.Join(cwd, "state")
+	command := append([]string{"wrap", "--"}, helperCommand(t, "success")...)
+	for attempt := 1; attempt <= 2; attempt++ {
+		var stderr bytes.Buffer
+		if code := runCLI(t, context.Background(), cwd, stateDir, io.Discard, &stderr, command); code != 0 {
+			t.Fatalf("wrap %d exit = %d, stderr=%q", attempt, code, stderr.String())
+		}
+		runID := recordedRunIDFromStderr(t, stderr.String())
+		wantStderr := fmt.Sprintf("warning\nmotus: recorded %s (success)\n", runID)
+		if stderr.String() != wantStderr {
+			t.Fatalf("wrap %d stderr = %q, want %q", attempt, stderr.String(), wantStderr)
+		}
 	}
 }
 
@@ -396,7 +407,7 @@ func TestWrapPreservesNonzeroExitAndClosesRun(t *testing.T) {
 	) + "\n"
 	if !strings.Contains(stderr.String(), wantFinding) ||
 		!strings.Contains(stderr.String(), wantReceipt) ||
-		strings.Contains(stderr.String(), nextCommandLabel()) {
+		strings.Contains(stderr.String(), "Next") {
 		t.Fatalf("failed wrap guidance = %q", stderr.String())
 	}
 }
@@ -529,9 +540,10 @@ func TestWrapCancellationStillClosesRun(t *testing.T) {
 	command := append([]string{"wrap", "--"}, helperCommand(t, "sleep", readyPath)...)
 	arguments := append([]string{"--state-dir", stateDir}, command...)
 	t.Setenv("MOTUS_TEST_HELPER", "1")
+	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
-		done <- Run(ctx, arguments, testEnvironment(cwd, io.Discard, io.Discard))
+		done <- Run(ctx, arguments, testEnvironment(cwd, io.Discard, &stderr))
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -560,6 +572,14 @@ func TestWrapCancellationStillClosesRun(t *testing.T) {
 	}
 	if runs[0].State != store.RunClosed || runs[0].Outcome != store.OutcomeAborted || runs[0].TimedOut == nil || *runs[0].TimedOut {
 		t.Fatalf("canceled run = %#v", runs[0])
+	}
+	wantStderr := fmt.Sprintf("motus: recorded %s (aborted)\n%s %s\n",
+		runs[0].ID,
+		nextCommandLabel(),
+		displayCommand("motus", "--state-dir", stateDir, "run", "receipt", runs[0].ID),
+	)
+	if stderr.String() != wantStderr {
+		t.Fatalf("canceled wrap stderr = %q, want %q", stderr.String(), wantStderr)
 	}
 }
 
