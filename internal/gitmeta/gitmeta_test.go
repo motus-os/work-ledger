@@ -146,7 +146,10 @@ func TestGitTextCancellationDoesNotWaitForDescendantPipes(t *testing.T) {
 		result <- ok
 	}()
 
-	waitForFile(t, marker, time.Second)
+	// Git process startup is not the behavior under test and may be delayed
+	// when race-enabled packages run concurrently. Wait for the helper's
+	// explicit readiness signal before timing cancellation itself.
+	waitForFile(t, marker, 10*time.Second)
 	started := time.Now()
 	cancel()
 	ok := <-result
