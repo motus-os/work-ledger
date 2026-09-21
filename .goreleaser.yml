@@ -56,7 +56,17 @@ archives:
           owner: root
           group: root
           mtime: "{{ .CommitDate }}"
+      - src: CONTRIBUTING.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
       - src: docs/*.svg
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+      - src: docs/*.md
         info:
           owner: root
           group: root
