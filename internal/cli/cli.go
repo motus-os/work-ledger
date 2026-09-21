@@ -249,30 +249,39 @@ func runWrap(ctx context.Context, arguments []string, stateDir string, environme
 		fmt.Fprintln(environment.Stderr)
 	}
 	fmt.Fprintf(environment.Stderr, "motus: recorded %s (%s)\n", runID, outcome)
-	writeWrapNextSteps(environment.Stderr, environment.ProgramName, stateDir, runID, outcome)
+	switch outcome {
+	case store.OutcomeFailure:
+		writeWrapFailureGuidance(environment.Stderr, environment.ProgramName, stateDir, runID)
+	case store.OutcomeAborted:
+		writeWrapAbortedGuidance(environment.Stderr, environment.ProgramName, stateDir, runID)
+	}
 	return captureExitCode(result)
 }
 
-func writeWrapNextSteps(destination io.Writer, programName, stateDir, runID string, outcome store.Outcome) {
+func writeWrapFailureGuidance(destination io.Writer, programName, stateDir, runID string) {
 	receiptCommand := displayCommand(
 		programName,
 		"--state-dir", stateDir,
 		"run", "receipt", runID,
 	)
-	if outcome == store.OutcomeFailure {
-		fmt.Fprintln(destination, commandPromptLabel("Keep why this failed"))
-		fmt.Fprintf(destination, "  %s\n\n", displayCommand(
-			programName,
-			"--state-dir", stateDir,
-			"finding", "add",
-			"--run", runID,
-			"--file", "-",
-		))
-		fmt.Fprintln(destination, commandPromptLabel("Inspect the run"))
-		fmt.Fprintf(destination, "  %s\n", receiptCommand)
-		return
-	}
-	fmt.Fprintf(destination, "%s %s\n", nextCommandLabel(), receiptCommand)
+	fmt.Fprintln(destination, commandPromptLabel("Keep why this failed"))
+	fmt.Fprintf(destination, "  %s\n\n", displayCommand(
+		programName,
+		"--state-dir", stateDir,
+		"finding", "add",
+		"--run", runID,
+		"--file", "-",
+	))
+	fmt.Fprintln(destination, commandPromptLabel("Inspect the run"))
+	fmt.Fprintf(destination, "  %s\n", receiptCommand)
+}
+
+func writeWrapAbortedGuidance(destination io.Writer, programName, stateDir, runID string) {
+	fmt.Fprintf(destination, "%s %s\n", nextCommandLabel(), displayCommand(
+		programName,
+		"--state-dir", stateDir,
+		"run", "receipt", runID,
+	))
 }
 
 func displayCommand(arguments ...string) string {
