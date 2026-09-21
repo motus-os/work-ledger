@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="360" height="820" viewBox="0 0 360 820" role="img" aria-labelledby="title desc">
   <title id="title">How Motus works</title>
-  <desc id="desc">First, a developer, agent, or CI job records a command run. Next, a person or agent adds a finding linked to that run. Later, a search returns the finding with its source run.</desc>
+  <desc id="desc">First, a developer, agent, or CI job records a command run. Next, a person or agent adds a finding linked to that run. Later, list finds the finding and show opens its linked run context.</desc>
   <style>
     .sans { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
     .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
@@ -54,7 +54,7 @@
     <path d="M24 660H336" fill="none" stroke="#263044" stroke-width="1.5"/>
     <text class="mono terminal-command" x="40" y="645">$ motus finding list --query term</text>
     <text class="sans terminal-title" x="40" y="686">Finding returned</text>
-    <text class="sans terminal-meta" x="40" y="703">with its source run</text>
+    <text class="sans terminal-meta" x="40" y="703">use show to open its run context</text>
   </g>
   <text class="sans heading" x="24" y="740">Retrieve it later</text>
   <text class="sans body" x="24" y="767">Search the same local ledger</text>
